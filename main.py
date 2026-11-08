@@ -1,4 +1,4 @@
- import os
+import os
 import json
 import threading
 import uuid
@@ -40,7 +40,12 @@ orders = {}
 # --- 🤖 4. Botクラス定義 ---
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=discord.Intents.all())
+        # Discord側の設定不一致によるクラッシュを回避するため、必要な権限だけを明示
+        intents = discord.Intents.default()
+        intents.message_content = True  # メッセージ内容の取得権限
+        intents.members = True          # ユーザー検索・購入者へのDM送信権限
+        super().__init__(command_prefix="!", intents=intents)
+        
     async def setup_hook(self):
         await self.tree.sync()
 
@@ -55,7 +60,7 @@ async def nt(item, pr, url, uid, oid):
     except Exception as e:
         print(f"通知送信エラー: {e}")
 
-# --- 🛠️ 5. スラッシュコマンド ---
+# --- 🛠️ 5. スラッシュコマンド（商品・在庫管理機能） ---
 
 @bot.tree.command(name="商品枠追加", description="【運営専用】新しい商品メニュー（枠）を作成します")
 async def create_prod(it: discord.Interaction, game: str, key: str, name: str, price: int):
@@ -110,6 +115,7 @@ class ItemSel(discord.ui.Select):
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
         
+        # リスト丸ごとではなく、先頭にある在庫データ1つだけを確実に引き渡す
         if p and p["stock_items"]: 
             target_item = p["stock_items"][0]
             await it.response.send_modal(PayModal(p, target_item, self.g))
@@ -140,10 +146,11 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
-        # タイムアウト対策：即座に応答を返す
+        # 【タイムアウト対策】4秒かかる外部連携の前に即座に応答を返す（3秒の壁を回避）
         await it.response.defer(ephemeral=True)
         
         oid = str(it.id)
+        # 単一オブジェクト（self.i）から安全にIDとデータを抽出
         orders[oid] = {
             "uid": it.user.id, 
             "g": self.g, 
@@ -198,6 +205,8 @@ class AdminView(discord.ui.View):
 # --- 🚀 7. 起動イベント & Botの実行処理 ---
 @bot.event
 async def on_ready():
+    # スラッシュコマンド（/商品枠追加など）をDiscordへ同期
+    await bot.tree.sync()
     print("自販機BOTが正常に起動しました！")
 
 if TOKEN:
