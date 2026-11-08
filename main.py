@@ -9,7 +9,6 @@ def srv():
 threading.Thread(target=srv, daemon=True).start()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-# 🛠️ 提供いただいた管理者IDをデフォルト値として設定しました
 ADMIN_ID = int(os.getenv("ADMIN_ID", "1445106767796113478"))
 
 # 📦 最初は完全な空っぽ（白紙）です！
@@ -64,9 +63,17 @@ class ItemSel(discord.ui.Select):
         opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in GAME_DATA.get(g, []) if len(x["stock_items"]) > 0]
         super().__init__(placeholder="選択してください" if opts else "売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     async def callback(self, it: discord.Interaction):
-        if self.values == "none": return
-        p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == self.values), None)
-        if p and p["stock_items"]: await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
+        if not self.values or self.values[0] == "none": return
+        
+        # 🛠️ self.values[0] を使って正確に選択されたキーを取得するように修正
+        selected_key = self.values[0]
+        p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
+        
+        if p and p["stock_items"]: 
+            # 🛠️ 在庫の最初の1個（[0]）を正しく渡すように修正
+            await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
+        else:
+            await it.response.send_message("❌商品の取得に失敗したか、売り切れました。", ephemeral=True)
 
 class VendView(discord.ui.View):
     def __init__(self, g):
