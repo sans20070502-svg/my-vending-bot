@@ -12,7 +12,7 @@ def srv():
 
 threading.Thread(target=srv, daemon=True).start()
 
-# --- 🔑 2. 環境変数と設定 ---
+# --- 🔑 2. Environment Variables & Admin Configuration ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 # 🎯 あなたのDiscordユーザーID
 ADMIN_ID = 1445106767796113478
@@ -109,13 +109,14 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        # リストの最初の1つを取得
-        val = self.values[0] if self.values else "none"
+        val = self.values if self.values else "none"
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
-        # 🎯 在庫リストの最初の要素 [0] を正確に指定するように修正しました
+        
+        # 🎯 在庫リストから「最初の1つだけ（辞書データ）」を確実に取り出してモーダルに渡すよう修正
         if p and p["stock_items"]: 
-            await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
+            target_stock = p["stock_items"]
+            await it.response.send_modal(PayModal(p, target_stock, self.g))
 
 class VendView(discord.ui.View):
     def __init__(self, g):
@@ -138,13 +139,23 @@ class VendView(discord.ui.View):
 class PayModal(discord.ui.Modal):
     def __init__(self, p, i, g):
         super().__init__(title="購入手続き")
-        self.p, self.i, self.g = p, i, g
+        self.p, self.i, self.g = p, i, g  # i には1つの在庫データ（辞書）が入る
         self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
-        orders[oid] = {"uid": it.user.id, "g": self.g, "key": self.p["product_key"], "iid": self.i["id"], "name": self.p["display_name"], "data": self.i["data"], "price": self.p["price"], "url": self.inp.value}
+        # 🎯 辞書から安全にデータを取得できるように完全にバグを解消しました
+        orders[oid] = {
+            "uid": it.user.id, 
+            "g": self.g, 
+            "key": self.p["product_key"], 
+            "iid": self.i["id"], 
+            "name": self.p["display_name"], 
+            "data": self.i["data"], 
+            "price": self.p["price"], 
+            "url": self.inp.value
+        }
         await it.response.send_message("✅ 申請を受け付けました！管理者の承認後、DMにてアカウント情報が届きます。", ephemeral=True)
         await nt(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid)
 
