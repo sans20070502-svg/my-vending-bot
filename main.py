@@ -14,10 +14,7 @@ threading.Thread(target=srv, daemon=True).start()
 
 # --- 🔑 2. 設定（ID類） ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-# 🎯 あなたのDiscordユーザーID
 ADMIN_ID = 1445106767796113478
-
-# 🎯 【重要】通知を送るチャンネルIDを直接固定しました
 NOTIFY_CHANNEL_ID = 1569037305644056639
 
 DATA_FILE = "vending_data.json"
@@ -109,13 +106,14 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        val = self.values if self.values else "none"
+        val = self.values[0] if self.values else "none"
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
         
+        # 🎯 在庫リストの最初の1つ「[0]」を確実にモーダルに渡すよう完全修正しました！
         if p and p["stock_items"]: 
-            target_stock = p["stock_items"]
-            await it.response.send_modal(PayModal(p, target_stock, self.g))
+            target_item = p["stock_items"][0]
+            await it.response.send_modal(PayModal(p, target_item, self.g))
 
 class VendView(discord.ui.View):
     def __init__(self, g):
