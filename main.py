@@ -1,4 +1,4 @@
-import os, threading, uuid, discord, asyncio
+ import os, threading, uuid, discord, asyncio
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from discord.ext import commands
 from discord import app_commands as ap
@@ -11,9 +11,10 @@ threading.Thread(target=srv, daemon=True).start()
 TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "1445106767796113478"))
 
-# 📦 最初は完全な空っぽ（白紙）です！
+# 📦 データを一時保存する場所
 GAME_DATA = {}
 orders = {}
+user_selection = {}  # ユーザーが何を選んだかを一時的に記憶するセーフティ用の変数
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -68,13 +69,14 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values == "none": return
         
-        # 🛠️ 【ここを修正】リスト形式の values から確実に最初の文字列（[0]番目）を取得します
         selected_key = self.values[0]
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
-        # 🛠️ 在庫リストの最初の1個（[0]番目）を正確にフォームに引き渡します
         if p and p["stock_items"]: 
-            await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
+            # 🛠️ フォームにデータを詰め込まず、購入者のIDをキーにして裏で一時記憶させる！
+            user_selection[it.user.id] = {"p": p, "i": p["stock_items"][0], "g": self.g}
+            # フォームは極限まで軽くして表示させる
+            await it.response.send_modal(PayModal())
         else:
             await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
 
@@ -93,22 +95,33 @@ class VendView(discord.ui.View):
         for p in GAME_DATA.get(self.g, []): txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
         await it.response.send_message(embed=discord.Embed(title="🔎在庫確認", description=txt if txt else "商品なし"), ephemeral=True)
 
+# 🛠️ フォームの中身を完全な白紙（入力欄だけ）にして軽量化
 class PayModal(discord.ui.Modal):
-    def __init__(self, p, i, g):
+    def __init__(self):
         super().__init__(title="購入手続き")
-        self.p, self.i, self.g = p, i, g
         self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.inp)
     async def callback(self, it: discord.Interaction):
-        oid = str(it.id)
-        # 正しい1個の在庫データから、IDと中身を安全に記録
-        orders[oid] = {"uid": it.user.id, "g": self.g, "key": self.p["product_key"], "iid": self.i["id"], "name": self.p["display_name"], "data": self.i["data"], "price": self.p["price"], "url": self.inp.value}
+        # 送信した人のIDから、さっき裏に保存した選択データを引き出す
+        sel = user_selection.get(it.user.id)
+        if not sel:
+            return await it.response.send_message("❌セッションが切れました。もう一度選択し直してください。", ephemeral=True)
         
-        # 1. タイムアウト防止のため即座に受付画面を返す
+        p, i, g = sel["p"], sel["i"], sel["g"]
+        oid = str(it.id)
+        
+        # 注文を記録
+        orders[oid] = {"uid": it.user.id, "g": g, "key": p["product_key"], "iid": i["id"], "name": p["display_name"], "data": i["data"], "price": p["price"], "url": self.inp.value}
+        
+        # 1. 最優先で成功を返す（これで「問題が発生しました」を絶対に出さない）
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
         # 2. 通知処理を非同期で実行
-        asyncio.create_task(send_notification_lazy(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid))
+        asyncio.create_task(send_notification_lazy(p["display_name"], p["price"], self.inp.value, it.user.id, oid))
+        
+        # 使い終わった一時記憶データを消去
+        if it.user.id in user_selection:
+            del user_selection[it.user.id]
 
 class AdminView(discord.ui.View):
     def __init__(self, oid):
