@@ -38,8 +38,7 @@ pending_orders = {}
 class MyBot(commands.Bot):
  def __init__(self):
   intents = discord.Intents.default()
-  intents.message_content = True
-  intents.members = True
+  intents.message_content = True # 👈 クラッシュの元になる members=True を完全に削除しました
   super().__init__(command_prefix="!", intents=intents)
  async def setup_hook(self):
   await self.tree.sync()
@@ -207,4 +206,3 @@ class AdminApprovalView(discord.ui.View):
    user = await bot.fetch_user(order["user_id"])
    if user:
     try: await user.send(f"❌ 【{order['item_name']}】の購入申請が拒否されました。")
-    except: pass
