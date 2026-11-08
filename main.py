@@ -2,6 +2,18 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
+import threading  # 👈 追加：エラー回避用
+from http.server import HTTPServer, SimpleHTTPRequestHandler  # 👈 追加：エラー回避用
+
+# 💡 Renderの「ポート開かないエラー」を回避するためのダミーサーバー機能
+def run_dummy_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
+    print(f"Dummy server listening on port {port}...")
+    server.serve_forever()
+
+# バックグラウンドでダミーサーバーを起動（Renderのチェックを突破します）
+threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # 🔒 Renderの環境変数（Environment）から安全にトークンと管理者IDを読み込みます
 TOKEN = os.getenv("DISCORD_TOKEN")
