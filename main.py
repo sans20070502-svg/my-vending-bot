@@ -14,7 +14,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "1445106767796113478"))
 # 📦 データを一時保存する場所
 GAME_DATA = {}
 orders = {}
-user_selection = {}  # ユーザーが何を選んだかを一時的に記憶するセーフティ用の変数
+user_selection = {}  # ユーザーの選択を一時保存するセーフティ用の変数
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -53,7 +53,7 @@ async def add_st(it: discord.Interaction, game: str, key: str, data: str):
     if p:
         p["stock_items"].append({"id": str(uuid.uuid4()), "data": data})
         await it.response.send_message(f"✅追加済(現在{len(p['stock_items'])}個)", ephemeral=True)
-    else: await it.response.send_message("❌商品枠が見つかりません。先に /商品枠追加 をしてください", agenda=True)
+    else: await it.response.send_message("❌商品枠が見つかりません。先に /商品枠追加 をしてください", ephemeral=True)
 
 @bot.tree.command(name="在庫確認")
 async def usr_ck(it: discord.Interaction, game: str):
@@ -69,11 +69,12 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values == "none": return
         
-        selected_key = self.values[0]
+        selected_key = self.values
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
         if p and p["stock_items"]: 
-            user_selection[it.user.id] = {"p": p, "i": p["stock_items"][0], "g": self.g}
+            # 🛠️ 在庫リストの「最初の1個（）」を確実に一時保存に引き渡す
+            user_selection[it.user.id] = {"p": p, "i": p["stock_items"], "g": self.g}
             await it.response.send_modal(PayModal())
         else:
             await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
@@ -106,9 +107,13 @@ class PayModal(discord.ui.Modal):
         p, i, g = sel["p"], sel["i"], sel["g"]
         oid = str(it.id)
         
+        # 🛠️ PayPayの入力値（self.inp.value）と一緒に、安全に取得した在庫データを記録します
         orders[oid] = {"uid": it.user.id, "g": g, "key": p["product_key"], "iid": i["id"], "name": p["display_name"], "data": i["data"], "price": p["price"], "url": self.inp.value}
         
+        # 1. タイムアウト防止のため即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
+        
+        # 2. 通知処理を非同期で実行
         asyncio.create_task(send_notification_lazy(p["display_name"], p["price"], self.inp.value, it.user.id, oid))
         
         if it.user.id in user_selection:
