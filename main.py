@@ -58,7 +58,7 @@ async def add_st(it: discord.Interaction, game: str, key: str, data: str):
     else: 
         await it.response.send_message("❌商品枠が見つかりません。先に /商品枠追加 をしてください", ephemeral=True)
 
-# --- 🛠️ 3. スラッシュコマンド用の在庫確認 ---
+# --- 🛠️ 3. 在庫確認コマンド ---
 @bot.tree.command(name="在庫確認")
 async def usr_ck(it: discord.Interaction, game: str):
     txt = ""
@@ -78,13 +78,14 @@ class BuyButton(discord.ui.Button):
         )
 
     async def callback(self, it: discord.Interaction):
-        if not self.product["stock_items"] or len(self.product["stock_items"]) == 0:
-            return await it.response.send_message("❌申し訳ありません、この商品はただいま売り切れました。", ephemeral=True)
+        # ⚠️ ボタンを押した瞬間に、在庫が本当に存在するかチェック
+        if not self.product or "stock_items" not in self.product or len(self.product["stock_items"]) == 0:
+            return await it.response.send_message("❌申し訳ありません、この商品は売り切れました。", ephemeral=True)
         
         first_item = self.product["stock_items"][0]
         await it.response.send_modal(PayModal(self.game_name, self.product, first_item))
 
-# --- 🛠️ 5. 【復活】自販機パネル埋め込み用の在庫確認ボタン ---
+# --- 🛠️ 5. 自販機パネル埋め込み用の在庫確認ボタン ---
 class CheckStockButton(discord.ui.Button):
     def __init__(self, game_name):
         self.game_name = game_name
@@ -96,25 +97,21 @@ class CheckStockButton(discord.ui.Button):
 
     async def callback(self, it: discord.Interaction):
         txt = ""
-        for p in GAME_DATA.get(self.game_name, []): 
+        for p in GAME_DATA.get(self.g_name if hasattr(self, 'g_name') else self.game_name, []): 
             txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
         await it.response.send_message(
-            embed=discord.Embed(title=f"🔎在庫確認({self.game_name})", description=txt if txt else "商品なし"), 
+            embed=discord.Embed(title=f"🔎在庫確認", description=txt if txt else "商品なし"), 
             ephemeral=True
         )
 
-# --- 🛠️ 6. 自販機にボタンを並べるシステム（購入ボタン＋在庫確認ボタン） ---
+# --- 🛠️ 6. 自販機ビューシステム ---
 class VendView(discord.ui.View):
     def __init__(self, g):
         super().__init__(timeout=None)
         self.g = g
-        
-        # ① 在庫が1個以上ある購入ボタンを自動で並べる
         for p in GAME_DATA.get(g, []):
             if len(p["stock_items"]) > 0:
                 self.add_item(BuyButton(g, p))
-                
-        # ② 自販機の最後に「🔎 在庫確認」のボタンを確実にくっつけて復活させる
         self.add_item(CheckStockButton(g))
 
 # --- 🛠️ 7. モーダルの挙動（超軽量・エラー絶対防止仕様） ---
@@ -135,21 +132,25 @@ class PayModal(discord.ui.Modal):
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
         
-        orders[oid] = {
-            "uid": int(it.user.id),
-            "g": str(self.game_name),
-            "key": str(self.product["product_key"]),
-            "iid": str(self.item["id"]),
-            "name": str(self.product["display_name"]),
-            "data": str(self.item["data"]),
-            "price": int(self.product["price"]),
-            "url": str(self.inp.value)
-        }
+        # ⚠️ 【絶対安全対策】データが消えていた場合でもクラッシュせずエラー画面を出すセーフガード
+        try:
+            orders[oid] = {
+                "uid": int(it.user.id),
+                "g": str(self.game_name),
+                "key": str(self.product["product_key"]),
+                "iid": str(self.item["id"]),
+                "name": str(self.product["display_name"]),
+                "data": str(self.item["data"]),
+                "price": int(self.product["price"]),
+                "url": str(self.inp.value)
+            }
+        except:
+            return await it.response.send_message("❌システムが再起動されたため、自販機パネルが古くなっています。お手数ですが、一度古いメッセージを削除し、新しく `/自販機設置` を実行し直してから再度ご購入ください。", ephemeral=True)
         
-        # タイムアウト防止のため、最優先で即座に受付画面を返す
+        # タイムアウト防止のため即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
-        # 通知処理を裏（バックグラウンド）で実行
+        # 通知処理を裏で実行
         asyncio.create_task(send_notification_lazy(str(self.product["display_name"]), int(self.product["price"]), str(self.inp.value), it.user.id, oid))
 
 # --- 🛠️ 8. 管理者用の承認・拒否ビュー ---
@@ -195,7 +196,6 @@ async def vending(it: discord.Interaction, game: str):
     txt = ""
     for p in GAME_DATA.get(game, []): 
         txt += f"`値段：{p['price']}円`\n{p['display_name']}\n\n"
-    # 動的にボタンが付いたViewを表示します
     await it.response.send_message(
         embed=discord.Embed(title="購入", description=txt if txt else "ただいま商品準備中です。", color=discord.Color.from_rgb(46, 204, 113)), 
         view=VendView(game)
@@ -208,4 +208,4 @@ async def on_ready():
 if TOKEN: 
     bot.run(TOKEN)
 else: 
-    print("TOKENエラー：環境変数が正しくありません")
+    print("TOKENエラー")
