@@ -69,8 +69,8 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values == "none": return
         
-        # 安全に選択されたキー文字列を取得
-        selected_key = self.values if isinstance(self.values, str) else self.values
+        # 🛠️ リストから確実に最初の1つの文字列（"y30" など）を取り出すように修正
+        selected_key = self.values
         
         p = None
         for x in GAME_DATA.get(self.g, []):
@@ -79,9 +79,9 @@ class ItemSel(discord.ui.Select):
                 break
         
         if p and p["stock_items"]: 
-            # ユーザーIDをキーにして、裏で選択したデータを確実に一時保存
+            # ユーザーIDをキーにして、裏で選択した在庫データの最初の1個（0番目）を確実に一時保存
             user_selection[it.user.id] = {"p": p, "i": p["stock_items"], "g": self.g}
-            # 🛠️ 100%正常な構造に修正したPayPay入力フォームを表示
+            # PayPay入力フォームを表示
             await it.response.send_modal(PayModal())
         else:
             await it.response.send_message("❌商品の取得に失敗したか、売り切れました。", ephemeral=True)
@@ -101,9 +101,8 @@ class VendView(discord.ui.View):
         for p in GAME_DATA.get(self.g, []): txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
         await it.response.send_message(embed=discord.Embed(title="🔎在庫確認", description=txt if txt else "商品なし"), ephemeral=True)
 
-# 🛠️ Discord.pyの正規の仕様に完全に準拠させたPayPayフォームクラス
+# Discord.pyの正規仕様に準拠したPayPayフォームクラス
 class PayModal(discord.ui.Modal, title="購入手続き"):
-    # クラスの直下でTextInputを定義するのが、一番エラーが起きない確実な書き方です
     inp = discord.ui.TextInput(
         label="PayPay送金リンク",
         placeholder="https://paypay.ne.jp...",
@@ -118,7 +117,7 @@ class PayModal(discord.ui.Modal, title="購入手続き"):
         p, i, g = sel["p"], sel["i"], sel["g"]
         oid = str(it.id)
         
-        # 注文を安全に記録
+        # 注文を記録
         orders[oid] = {
             "uid": it.user.id,
             "g": g,
@@ -130,13 +129,13 @@ class PayModal(discord.ui.Modal, title="購入手続き"):
             "url": self.inp.value
         }
         
-        # 1. タイムアウト防止のため即座に受付画面を返す
+        # 1. 最優先で受付完了を返す（タイムアウト防止）
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
         # 2. 通知処理を裏で非同期実行
         asyncio.create_task(send_notification_lazy(p["display_name"], p["price"], self.inp.value, it.user.id, oid))
         
-        # 使い終わったデータを削除
+        # 使用後に一時保存データを削除
         if it.user.id in user_selection:
             del user_selection[it.user.id]
 
