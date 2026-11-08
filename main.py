@@ -109,11 +109,11 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        # ⚠️ self.valuesはリストなので最初の1つを取得
+        # リストの最初の1つを取得
         val = self.values[0] if self.values else "none"
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
-        # 🎯 在庫リストの最初の1つ（p["stock_items"][0]）を正しく渡すように修正しました
+        # 🎯 在庫リストの最初の要素 [0] を正確に指定するように修正しました
         if p and p["stock_items"]: 
             await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
 
