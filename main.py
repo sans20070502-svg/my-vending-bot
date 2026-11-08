@@ -17,13 +17,19 @@ orders = {}
 
 class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=discord.Intents.all())
+        # 🛠️ 開発者ポータル側でONにしたすべてのインテントを強制同期します
+        intents = discord.Intents.all()
+        intents.members = True
+        intents.presences = True
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
+        
     async def setup_hook(self):
         await self.tree.sync()
 
 bot = MyBot()
 
-# 管理者への通知DM送信タスク（完全に裏で動かすためタイムアウトしません）
+# 管理者への通知DM送信タスク
 async def send_notification_lazy(item, pr, url, uid, oid):
     await asyncio.sleep(0.5)
     try:
@@ -78,11 +84,10 @@ class BuyButton(discord.ui.Button):
         )
 
     async def callback(self, it: discord.Interaction):
-        # ⚠️ ボタンを押した瞬間に、在庫が本当に存在するかチェック
         if not self.product or "stock_items" not in self.product or len(self.product["stock_items"]) == 0:
             return await it.response.send_message("❌申し訳ありません、この商品は売り切れました。", ephemeral=True)
         
-        first_item = self.product["stock_items"][0]
+        first_item = self.product["stock_items"]
         await it.response.send_modal(PayModal(self.game_name, self.product, first_item))
 
 # --- 🛠️ 5. 自販機パネル埋め込み用の在庫確認ボタン ---
@@ -97,7 +102,7 @@ class CheckStockButton(discord.ui.Button):
 
     async def callback(self, it: discord.Interaction):
         txt = ""
-        for p in GAME_DATA.get(self.g_name if hasattr(self, 'g_name') else self.game_name, []): 
+        for p in GAME_DATA.get(self.game_name, []): 
             txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
         await it.response.send_message(
             embed=discord.Embed(title=f"🔎在庫確認", description=txt if txt else "商品なし"), 
@@ -114,7 +119,7 @@ class VendView(discord.ui.View):
                 self.add_item(BuyButton(g, p))
         self.add_item(CheckStockButton(g))
 
-# --- 🛠️ 7. モーダルの挙動（超軽量・エラー絶対防止仕様） ---
+# --- 🛠️ 7. モーダルの挙動 ---
 class PayModal(discord.ui.Modal):
     def __init__(self, game_name, product, item):
         super().__init__(title="購入手続き")
@@ -132,7 +137,6 @@ class PayModal(discord.ui.Modal):
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
         
-        # ⚠️ 【絶対安全対策】データが消えていた場合でもクラッシュせずエラー画面を出すセーフガード
         try:
             orders[oid] = {
                 "uid": int(it.user.id),
@@ -145,9 +149,9 @@ class PayModal(discord.ui.Modal):
                 "url": str(self.inp.value)
             }
         except:
-            return await it.response.send_message("❌システムが再起動されたため、自販機パネルが古くなっています。お手数ですが、一度古いメッセージを削除し、新しく `/自販機設置` を実行し直してから再度ご購入ください。", ephemeral=True)
+            return await it.response.send_message("❌システム再起動により古いパネルになっています。お手数ですが再設置してください。", ephemeral=True)
         
-        # タイムアウト防止のため即座に受付画面を返す
+        # タイムアウト防止のため、即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
         # 通知処理を裏で実行
@@ -177,7 +181,7 @@ class AdminView(discord.ui.View):
                 await it.message.edit(view=self)
                 if self.oid in orders: del orders[self.oid]
             except: 
-                await it.response.send_message("❌購入者のDMが閉じられているため送信失敗しました", ephemeral=True)
+                await it.response.send_message("❌DMが閉じられているため送信失敗しました", ephemeral=True)
                 
     @discord.ui.button(label="❌ 拒否", style=discord.ButtonStyle.danger)
     async def dn_b(self, it: discord.Interaction, b: discord.ui.Button):
