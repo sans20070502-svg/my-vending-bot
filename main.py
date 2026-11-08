@@ -25,7 +25,7 @@ bot = MyBot()
 
 # 裏で通知を送るためのバックグラウンドタスク
 async def send_notification_lazy(item, pr, url, uid, oid):
-    await asyncio.sleep(0.5)  # フォームを閉じる処理を優先させるため少し待つ
+    await asyncio.sleep(0.5)
     try:
         ad = await bot.fetch_user(ADMIN_ID)
         if ad:
@@ -34,7 +34,7 @@ async def send_notification_lazy(item, pr, url, uid, oid):
     except Exception as e:
         print(f"通知DM送信エラー: {e}")
 
-# --- 🛠️ 1. 【新機能】商品枠そのものを新しく追加するコマンド ---
+# --- 🛠️ 1. 商品枠追加コマンド ---
 @bot.tree.command(name="商品枠追加", description="【運営専用】新しい商品メニュー（枠）を作成します")
 async def create_prod(it: discord.Interaction, game: str, key: str, name: str, price: int):
     if it.user.id != ADMIN_ID: return await it.response.send_message("❌不可", ephemeral=True)
@@ -66,13 +66,13 @@ class ItemSel(discord.ui.Select):
         opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in GAME_DATA.get(g, []) if len(x["stock_items"]) > 0]
         super().__init__(placeholder="選択してください" if opts else "売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     async def callback(self, it: discord.Interaction):
-        if not self.values or self.values[0] == "none": return
+        if not self.values or self.values == "none": return
         
-        selected_key = self.values[0]
+        selected_key = self.values[0]  # リストから選択された文字列キーを取得
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
+        # 🛠️ リスト丸ごとではなく、最初の1個「p["stock_items"][0]」を正確に渡すように完全修正！
         if p and p["stock_items"]: 
-            # 最初の在庫アイテムを渡して即座にフォームを表示
             await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
         else:
             await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
@@ -100,12 +100,13 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
+        # 正しい1個の辞書データから、IDと中身を安全に記録
         orders[oid] = {"uid": it.user.id, "g": self.g, "key": self.p["product_key"], "iid": self.i["id"], "name": self.p["display_name"], "data": self.i["data"], "price": self.p["price"], "url": self.inp.value}
         
-        # 1. タイムアウトを防ぐため、最優先でユーザーに受付完了画面を返す
+        # 1. タイムアウト防止のため即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
-        # 2. 通知処理は裏（バックグラウンド）でゆっくり動かす
+        # 2. 通知処理を非同期で実行
         asyncio.create_task(send_notification_lazy(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid))
 
 class AdminView(discord.ui.View):
