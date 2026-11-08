@@ -20,12 +20,15 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 0
 
-# 📦 在庫データ（最初は空っぽ、またはテスト用のみ。コマンドでここに追加されます）
+# 📦 在庫データ（ご要望通り「5個の枠」に拡張しました！）
+# product_key は在庫追加・削除コマンドで使用します（y10, y30, y50, y100, gokudo）
 GAME_DATA = {
     "ぷにぷに": [
         {"product_key": "y10", "display_name": "10万Yポイント＋Uzコイン1枚", "price": 300, "stock_items": []},
         {"product_key": "y30", "display_name": "30万Yポイント", "price": 500, "stock_items": []},
-        {"product_key": "gokudo", "display_name": "極土アカウント", "price": 1500, "stock_items": []}
+        {"product_key": "y50", "display_name": "50万Yポイント", "price": 800, "stock_items": []},
+        {"product_key": "y100", "display_name": "100万Yポイント", "price": 1500, "stock_items": []},
+        {"product_key": "gokudo", "display_name": "極土アカウント", "price": 3000, "stock_items": []}
     ],
     "バウンティ": [
         {"product_key": "b_normal", "display_name": "通常石垢", "price": 500, "stock_items": []}
@@ -49,17 +52,16 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# --- 🛠️ 【管理者専用】Discordから在庫を追加する隠しコマンド ---
-@bot.tree.command(name="在庫追加", description="【管理者専用】指定した商品に在庫（アカウント）を追加します")
+# --- 🛠️ 【運営者専用】在庫追加コマンド ---
+@bot.tree.command(name="在庫追加", description="【運営者専用】指定した商品に在庫を追加します")
 @app_commands.describe(
     game="ゲーム名（ぷにぷに、バウンティ、モンスト）",
-    product_key="商品キー（y10, y30, gokudo, b_normal, m_normal のいずれか）",
+    product_key="商品キー（y10, y30, y50, y100, gokudo）",
     account_data="引き渡すアカウント情報（IDやパスワードなど）"
 )
 async def add_stock(interaction: discord.Interaction, game: str, product_key: str, account_data: str):
-    # 管理者チェック
     if interaction.user.id != ADMIN_ID:
-        await interaction.response.send_message("❌ このコマンドはBOT管理者（あなた）しか使用できません。", ephemeral=True)
+        await interaction.response.send_message("❌ このコマンドはBOT運営者しか使用できません。", ephemeral=True)
         return
 
     if game not in GAME_DATA:
@@ -70,24 +72,70 @@ async def add_stock(interaction: discord.Interaction, game: str, product_key: st
     target_prod = next((p for p in products if p["product_key"] == product_key), None)
 
     if not target_prod:
-        await interaction.response.send_message(f"❌ 商品キー『{product_key}』が見つかりません。設定を確認してください。", ephemeral=True)
+        await interaction.response.send_message(f"❌ 商品キー『{product_key}』が見つかりません。", ephemeral=True)
         return
 
-    # 在庫を1件追加
     new_item = {
-        "id": str(uuid.uuid4()), # 被らないIDを自動作成
+        "id": str(uuid.uuid4()),
         "data": account_data
     }
     target_prod["stock_items"].append(new_item)
 
     current_count = len(target_prod["stock_items"])
     await interaction.response.send_message(
-        f"✅ 【{game}】の「{target_prod['display_name']}」に在庫を1件追加しました！\n"
+        f"✅ 【{game}】の「{target_prod['display_name']}」に在庫を追加しました！\n"
         f"現在の在庫数: `{current_count}個`", 
         ephemeral=True
     )
 
-# --- 🛒 購入・セレクトメニューまわりの処理 ---
+# --- 🛠️ 【運営者専用】在庫クリア（削除）コマンド ---
+@bot.tree.command(name="在庫削除", description="【運営者専用】指定した商品の在庫をすべて削除して0個にします")
+@app_commands.describe(
+    game="ゲーム名（ぷにぷに、バウンティ、モンスト）",
+    product_key="商品キー（y10, y30, y50, y100, gokudo）"
+)
+async def clear_stock(interaction: discord.Interaction, game: str, product_key: str):
+    if interaction.user.id != ADMIN_ID:
+        await interaction.response.send_message("❌ このコマンドはBOT運営者しか使用できません。", ephemeral=True)
+        return
+
+    if game not in GAME_DATA:
+        await interaction.response.send_message(f"❌ ゲーム『{game}』が見つかりません。", ephemeral=True)
+        return
+
+    products = GAME_DATA[game]
+    target_prod = next((p for p in products if p["product_key"] == product_key), None)
+
+    if not target_prod:
+        await interaction.response.send_message(f"❌ 商品キー『{product_key}』が見つかりません。", ephemeral=True)
+        return
+
+    target_prod["stock_items"] = []
+    await interaction.response.send_message(f"🗑️ 【{game}】の「{target_prod['display_name']}」の在庫をすべて削除し、0個にリセットしました。", ephemeral=True)
+
+# --- 🛠️ 【運営者専用】中身確認コマンド ---
+@bot.tree.command(name="運営在庫確認", description="【運営者専用】現在登録されているアカウントデータの中身をすべて確認します")
+@app_commands.describe(game="確認したいゲーム名（ぷにぷに）")
+async def admin_check_stock(interaction: discord.Interaction, game: str):
+    if interaction.user.id != ADMIN_ID:
+        await interaction.response.send_message("❌ このコマンドはBOT運営者しか使用できません。", ephemeral=True)
+        return
+
+    if game not in GAME_DATA:
+        await interaction.response.send_message(f"❌ ゲーム『{game}』が見つかりません。", ephemeral=True)
+        return
+
+    products = GAME_DATA[game]
+    result_text = f"📋 【{game}】運営用データ確認ログ\n\n"
+    for prod in products:
+        result_text += f"■ {prod['display_name']} (キー: {prod['product_key']}) - 在庫数: {len(prod['stock_items'])}個\n"
+        for idx, item in enumerate(prod["stock_items"], 1):
+            result_text += f"  [{idx}] 中身: `{item['data']}`\n"
+        result_text += "\n"
+
+    await interaction.response.send_message(result_text, ephemeral=True)
+
+# --- 🛒 一般ユーザー向け：購入・在庫数ボタンまわり ---
 class ItemSelect(discord.ui.Select):
     def __init__(self, game_name):
         products = GAME_DATA.get(game_name, [])
@@ -118,8 +166,7 @@ class ItemSelect(discord.ui.Select):
         selected_prod = next((p for p in products if p["product_key"] == prod_key), None)
         
         if selected_prod and selected_prod["stock_items"]:
-            # 最初にある在庫を1件仮確保
-            item_data = selected_prod["stock_items"][0]
+            item_data = selected_prod["stock_items"][0] # 最初の1件を確保
             modal = PayPayModal(selected_prod, item_data, self.game_name)
             await interaction.response.send_modal(modal)
 
@@ -132,12 +179,11 @@ class VendingView(discord.ui.View):
     async def buy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = discord.ui.View()
         view.add_item(ItemSelect(self.game_name))
-        await interaction.response.send_message(f"【{self.game_name}】の商品リストを開きました。以下から選択してください：", view=view, ephemeral=True)
+        await interaction.response.send_message(f"【{self.game_name}】の商品リストを開きました：", view=view, ephemeral=True)
 
     @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="vending_stock_btn")
     async def stock_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         products = GAME_DATA.get(self.game_name, [])
-        
         stock_text = ""
         if not products:
             stock_text = "**❌ 現在、このゲームの商品設定がありません。**"
@@ -145,7 +191,7 @@ class VendingView(discord.ui.View):
             for prod in products:
                 stock_count = len(prod["stock_items"])
                 stock_text += f"**{prod['display_name']}**\n"
-                stock_text += f"` 在庫数：{stock_count}個 `\n"
+                stock_text += f"` 在庫数：{stock_count}個 `\n\n"
 
         embed = discord.Embed(
             title="🔎 在庫確認",
@@ -203,44 +249,3 @@ class PayPayModal(discord.ui.Modal):
             print(f"管理者への通知送信に失敗しました: {e}")
 
 class AdminApprovalView(discord.ui.View):
-    def __init__(self, order_id):
-        super().__init__(timeout=None)
-        self.order_id = order_id
-
-    @discord.ui.button(label="✅ 承認（引き渡し）", style=discord.ButtonStyle.success)
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        order = pending_orders.get(self.order_id)
-        if not order:
-            await interaction.response.send_message("この注文データは見つかりません。", ephemeral=True)
-            return
-
-        # 承認されたら在庫リストから本当に削除する
-        game_name = order["game_name"]
-        products = GAME_DATA.get(game_name, [])
-        selected_prod = next((p for p in products if p["product_key"] == order["product_key"]), None)
-        
-        if selected_prod:
-            selected_prod["stock_items"] = [item for item in selected_prod["stock_items"] if item["id"] != order["item_id"]]
-
-        user = await bot.fetch_user(order["user_id"])
-        if user:
-            try:
-                msg = f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n📦 ご購入ありがとうございました！\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n🔹 商品名：{order['item_name']}\n🔹 アカウント情報：\n{order['item_data']}"
-                await user.send(msg)
-                await interaction.response.send_message(f"✅ <@{order['user_id']}> へ商品を送信し、在庫を1減らしました！", ephemeral=True)
-                for child in self.children:
-                    child.disabled = True
-                await interaction.message.edit(view=self)
-                del pending_orders[self.order_id]
-            except Exception as e:
-                await interaction.response.send_message(f"❌ DM送信失敗: {e}", ephemeral=True)
-
-    @discord.ui.button(label="❌ 拒否", style=discord.ButtonStyle.danger)
-    async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
-        order = pending_orders.get(self.order_id)
-        if order:
-            user = await bot.fetch_user(order["user_id"])
-            if user:
-                try: await user.send(f"❌ 【{order['item_name']}】の購入申請が拒否されました。")
-                except: pass
-            await interaction.response.send_message("❌ 拒否しました。", ephemeral=True)
