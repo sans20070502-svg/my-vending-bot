@@ -2,34 +2,29 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
-import threading  # 👈 追加：エラー回避用
-from http.server import HTTPServer, SimpleHTTPRequestHandler  # 👈 追加：エラー回避用
+import threading
+from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-# 💡 Renderの「ポート開かないエラー」を回避するためのダミーサーバー機能
+# 💡 Renderの「ポート開かないタイムアウトエラー」を回避するための仕組み
 def run_dummy_server():
     port = int(os.getenv("PORT", 8080))
     server = HTTPServer(("0.0.0.0", port), SimpleHTTPRequestHandler)
     print(f"Dummy server listening on port {port}...")
     server.serve_forever()
 
-# バックグラウンドでダミーサーバーを起動（Renderのチェックを突破します）
+# バックグラウンドでダミーサーバーを起動（Renderのチェックを突破）
 threading.Thread(target=run_dummy_server, daemon=True).start()
 
-# 🔒 Renderの環境変数（Environment）から安全にトークンと管理者IDを読み込みます
+# 🔒 Render的環境変数（Environment）から安全にトークンと管理者IDを読み込み
 TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
-ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 1568800978533359759
+ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 0
 
+# 📦 在庫データ（ぷにぷにの商品を登録！）
+# ※ "data" の中身は、後から本物の「引き継ぎID」や「パスワード」に書き換えることができます。
 GAME_DATA = {
-    "モンスト": [
-        {"id": "m1", "name": "モンスト 石垢 A（在庫準備中）", "price": 1000, "data": "【モンスト商品1】ここに引き渡すIDやパスワードを入れます"},
-        {"id": "m2", "name": "モンスト 石垢 B（在庫準備中）", "price": 2000, "data": "【モンスト商品2】ここに引き渡すIDやパスワードを入れます"},
-    ],
-    "バウンティ": [
-        {"id": "b1", "name": "バウンティ 石垢 A（在庫準備中）", "price": 1500, "data": "【バウンティ商品1】ここに引き渡すIDやパスワードを入れます"},
-    ],
     "ぷにぷに": [
-        {"id": "p1", "name": "ぷにぷに ループ垢 A（在庫準備中）", "price": 1200, "data": "【ぷにぷに商品1】ここに引き渡すIDやパスワードを入れます"},
+        {"id": "p1", "name": "【ぷにぷに】石垢 30万Yポイント", "price": 500, "data": "【ぷにぷに商品】\nここに本物の引き継ぎIDやパスワードを書いておくと、購入承認時に自動送信されます。"}
     ]
 }
 
@@ -51,10 +46,10 @@ class ItemSelect(discord.ui.Select):
     def __init__(self, game_name):
         items = GAME_DATA.get(game_name, [])
         options = [
-            discord.SelectOption(label=f"【{item['id']}】{item['name']} ({item['price']}円)", value=item['id'])
+            discord.SelectOption(label=f"【{item['price']}円】{item['name'][:50]}", value=item['id'])
             for item in items
         ]
-        super().__init__(placeholder=f"{game_name} の商品を選択してください...", options=options)
+        super().__init__(placeholder="購入したい商品を選択してください...", options=options)
         self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
@@ -75,11 +70,11 @@ class VendingView(discord.ui.View):
     async def buy_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = discord.ui.View()
         view.add_item(ItemSelect(self.game_name))
-        await interaction.response.send_message(f"【{self.game_name}】の商品リストを開きました：", view=view, ephemeral=True)
+        await interaction.response.send_message(f"【{self.game_name}】の商品リストを開きました。以下から選択してください：", view=view, ephemeral=True)
 
 class PayPayModal(discord.ui.Modal):
     def __init__(self, item):
-        super().__init__(title=f"購入手続き")
+        super().__init__(title="購入手続き")
         self.item = item
         self.paypay_input = discord.ui.TextInput(
             label="PayPayの「送金リンク」を入力してください",
@@ -157,17 +152,29 @@ class AdminApprovalView(discord.ui.View):
             del pending_orders[self.order_id]
 
 @bot.tree.command(name="自販機設置", description="指定したゲームの専用自販機を設置します")
-@app_commands.describe(game="設置するゲーム名（モンスト、バウンティ、ぷにぷに）")
+@app_commands.describe(game="設置するゲーム名（例：ぷにぷに）")
 async def vending(interaction: discord.Interaction, game: str):
     if game not in GAME_DATA:
         await interaction.response.send_message(f"❌ 設定に『{game}』というゲームが登録されていません。", ephemeral=True)
         return
 
+    # 希望された縦並びのデザインを自動作成
+    description_text = "下のボタンを押して購入したい商品を選択してください\n\n"
+    
+    items = GAME_DATA[game]
+    if not items:
+        description_text += "**在庫なし**"
+    else:
+        for item in items:
+            description_text += f"`値段：{item['price']}円`\n"
+            description_text += f"{item['name']}\n\n"
+
     embed = discord.Embed(
-        title=f"🏪 【{game}】自動販売機",
-        description=f"下のボタンを押すと【{game}】の販売在庫の一覧が表示されます。\nPayPay決済後、商品はDMへ自動送信されます！",
-        color=discord.Color.green()
+        title="購入",
+        description=description_text,
+        color=discord.Color.from_rgb(46, 204, 113) # 画像の鮮やかな緑色
     )
+    
     view = VendingView(game)
     await interaction.response.send_message(embed=embed, view=view)
 
