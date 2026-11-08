@@ -66,9 +66,9 @@ class ItemSel(discord.ui.Select):
         opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in GAME_DATA.get(g, []) if len(x["stock_items"]) > 0]
         super().__init__(placeholder="選択してください" if opts else "売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     async def callback(self, it: discord.Interaction):
-        if not self.values or self.values[0] == "none": return
+        if not self.values or self.values == "none": return
         
-        # 🛠️ リストから最初の1つ（文字列）を確実に抜き出すように修正！
+        # 🛠️ リストの[0]番目から文字列（"y30"）を確実に抜き出すように完全修正！
         selected_key = self.values[0]
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
