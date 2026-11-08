@@ -8,7 +8,9 @@ def srv():
 
 threading.Thread(target=srv, daemon=True).start()
 
-TOKEN, ADMIN_ID = os.getenv("DISCORD_TOKEN"), int(os.getenv("ADMIN_ID", "0"))
+TOKEN = os.getenv("DISCORD_TOKEN")
+# 🛠️ 提供いただいた管理者IDをデフォルト値として設定しました
+ADMIN_ID = int(os.getenv("ADMIN_ID", "1445106767796113478"))
 
 # 📦 最初は完全な空っぽ（白紙）です！
 GAME_DATA = {}
