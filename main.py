@@ -20,8 +20,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 0
 
-# 📦 在庫データ（ご要望通り「5個の枠」に拡張しました！）
-# product_key は在庫追加・削除コマンドで使用します（y10, y30, y50, y100, gokudo）
+# 📦 在庫データ（5個の枠）
 GAME_DATA = {
     "ぷにぷに": [
         {"product_key": "y10", "display_name": "10万Yポイント＋Uzコイン1枚", "price": 300, "stock_items": []},
@@ -135,6 +134,28 @@ async def admin_check_stock(interaction: discord.Interaction, game: str):
 
     await interaction.response.send_message(result_text, ephemeral=True)
 
+# --- 🛠️ 在庫確認コマンド ---
+@bot.tree.command(name="在庫確認", description="指定したゲームの現在の在庫数を表示します")
+@app_commands.describe(game="在庫を見たいゲーム名（ぷにぷに、バウンティ、モンスト）")
+async def check_stock_cmd(interaction: discord.Interaction, game: str):
+    if game not in GAME_DATA:
+        await interaction.response.send_message(f"❌ ゲーム『{game}』が見つかりません。", ephemeral=True)
+        return
+
+    products = GAME_DATA[game]
+    stock_text = ""
+    for prod in products:
+        stock_count = len(prod["stock_items"])
+        stock_text += f"**{prod['display_name']}**\n"
+        stock_text += f"` 在庫数：{stock_count}個 `\n\n"
+
+    embed = discord.Embed(
+        title=f"🔎 在庫確認 ({game})",
+        description=stock_text,
+        color=discord.Color.from_rgb(230, 126, 34)
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # --- 🛒 一般ユーザー向け：購入・在庫数ボタンまわり ---
 class ItemSelect(discord.ui.Select):
     def __init__(self, game_name):
@@ -158,10 +179,10 @@ class ItemSelect(discord.ui.Select):
         self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
-        if self.values[0] == "none":
+        if self.values == "none":
             return
             
-        prod_key = self.values[0]
+        prod_key = self.values
         products = GAME_DATA.get(self.game_name, [])
         selected_prod = next((p for p in products if p["product_key"] == prod_key), None)
         
@@ -236,16 +257,3 @@ class PayPayModal(discord.ui.Modal):
 
         try:
             admin = await bot.fetch_user(ADMIN_ID)
-            if admin:
-                embed = discord.Embed(title="🔔 新しい購入申請が届きました", color=discord.Color.gold())
-                embed.add_field(name="購入者", value=f"<@{interaction.user.id}>", inline=False)
-                embed.add_field(name="商品名", value=self.product["display_name"], inline=False)
-                embed.add_field(name="価格", value=f"{self.product['price']} 円", inline=False)
-                embed.add_field(name="PayPayリンク", value=paypay_url, inline=False)
-                
-                view = AdminApprovalView(order_id)
-                await admin.send(embed=embed, view=view)
-        except Exception as e:
-            print(f"管理者への通知送信に失敗しました: {e}")
-
-class AdminApprovalView(discord.ui.View):
