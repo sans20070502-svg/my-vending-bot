@@ -68,11 +68,11 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values == "none": return
         
-        # 🛠️ リストの[0]番目から文字列（"y30"）を確実に抜き出すように完全修正！
+        # 🛠️ 【ここを修正】リスト形式の values から確実に最初の文字列（[0]番目）を取得します
         selected_key = self.values[0]
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
-        # 🛠️ 最初の1個の在庫オブジェクト（p["stock_items"][0]）を正確にフォームに渡す
+        # 🛠️ 在庫リストの最初の1個（[0]番目）を正確にフォームに引き渡します
         if p and p["stock_items"]: 
             await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
         else:
