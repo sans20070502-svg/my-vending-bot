@@ -20,7 +20,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 0
 
-# 📦 在庫データ（5個の枠）
+# 📦 在庫データ（ご要望の5個の枠）
 GAME_DATA = {
     "ぷにぷに": [
         {"product_key": "y10", "display_name": "10万Yポイント＋Uzコイン1枚", "price": 300, "stock_items": []},
@@ -179,10 +179,10 @@ class ItemSelect(discord.ui.Select):
         self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
-        if self.values == "none":
+        if self.values[0] == "none":
             return
             
-        prod_key = self.values
+        prod_key = self.values[0]
         products = GAME_DATA.get(self.game_name, [])
         selected_prod = next((p for p in products if p["product_key"] == prod_key), None)
         
@@ -256,4 +256,3 @@ class PayPayModal(discord.ui.Modal):
         )
 
         try:
-            admin = await bot.fetch_user(ADMIN_ID)
