@@ -12,14 +12,17 @@ def srv():
 
 threading.Thread(target=srv, daemon=True).start()
 
-# --- 🔑 2. Environment Variables & Admin Configuration ---
+# --- 🔑 2. 設定（ID類） ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 # 🎯 あなたのDiscordユーザーID
 ADMIN_ID = 1445106767796113478
 
+# 🎯 【重要】通知を送るチャンネルIDを直接固定しました
+NOTIFY_CHANNEL_ID = 1569037305644056639
+
 DATA_FILE = "vending_data.json"
 
-# --- 💾 3. データの保存・読み込みシステム（永続化機能） ---
+# --- 💾 3. データの保存・読み込みシステム ---
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -33,7 +36,6 @@ def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(GAME_DATA, f, ensure_ascii=False, indent=4)
 
-# 起動時にデータを読み込む
 GAME_DATA = load_data()
 orders = {}
 
@@ -46,31 +48,29 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# 管理者への新着申請通知
+# 指定したチャンネルへの新着申請通知
 async def nt(item, pr, url, uid, oid):
     try:
-        ad = await bot.fetch_user(ADMIN_ID)
-        if ad:
+        ch = bot.get_channel(NOTIFY_CHANNEL_ID) or await bot.fetch_channel(NOTIFY_CHANNEL_ID)
+        if ch:
             embed = discord.Embed(title="🔔新着申請", description=f"購入者:<@{uid}>\n商品:{item}\n価格:{pr}円\nリンク:{url}")
-            await ad.send(embed=embed, view=AdminView(oid))
-    except:
-        pass
+            await ch.send(embed=embed, view=AdminView(oid))
+    except Exception as e:
+        print(f"通知送信エラー: {e}")
 
-# --- 🛠️ 5. スラッシュコマンド（運営専用・一般用） ---
+# --- 🛠️ 5. スラッシュコマンド ---
 
 @bot.tree.command(name="商品枠追加", description="【運営専用】新しい商品メニュー（枠）を作成します")
 async def create_prod(it: discord.Interaction, game: str, key: str, name: str, price: int):
     if it.user.id != ADMIN_ID: 
         return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
-    
     if game not in GAME_DATA: 
         GAME_DATA[game] = []
-    
     if any(x["product_key"] == key for x in GAME_DATA[game]):
         return await it.response.send_message("❌そのキーは既に使われています", ephemeral=True)
     
     GAME_DATA[game].append({"product_key": key, "display_name": name, "price": price, "stock_items": []})
-    save_data()  # 変更を保存
+    save_data()
     await it.response.send_message(f"✅【{game}】に『{name} ({price}円)』の枠を作成しました！", ephemeral=True)
 
 @bot.tree.command(name="在庫追加", description="【運営専用】指定した商品枠にアカウントを追加します")
@@ -81,7 +81,7 @@ async def add_st(it: discord.Interaction, game: str, key: str, data: str):
     p = next((x for x in GAME_DATA.get(game, []) if x["product_key"] == key), None)
     if p:
         p["stock_items"].append({"id": str(uuid.uuid4()), "data": data})
-        save_data()  # 変更を保存
+        save_data()
         await it.response.send_message(f"✅追加済(現在{len(p['stock_items'])}個)", ephemeral=True)
     else: 
         await it.response.send_message("❌商品枠が見つかりません。先に /商品枠追加 をしてください", ephemeral=True)
@@ -100,7 +100,7 @@ async def vending(it: discord.Interaction, game: str):
         txt += f"`値段：{p['price']}円`\n{p['display_name']}\n\n"
     await it.response.send_message(embed=discord.Embed(title=f"🛒 {game} 自販機", description=txt if txt else "ただいま商品準備中です。", color=discord.Color.from_rgb(46, 204, 113)), view=VendView(game))
 
-# --- 🛒 6. UIコンポーネント（セレクトボックス・ボタン・モーダル） ---
+# --- 🛒 6. UIコンポーネント ---
 
 class ItemSel(discord.ui.Select):
     def __init__(self, g):
@@ -113,7 +113,6 @@ class ItemSel(discord.ui.Select):
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
         
-        # 🎯 在庫リストから「最初の1つだけ（辞書データ）」を確実に取り出してモーダルに渡すよう修正
         if p and p["stock_items"]: 
             target_stock = p["stock_items"]
             await it.response.send_modal(PayModal(p, target_stock, self.g))
@@ -139,13 +138,12 @@ class VendView(discord.ui.View):
 class PayModal(discord.ui.Modal):
     def __init__(self, p, i, g):
         super().__init__(title="購入手続き")
-        self.p, self.i, self.g = p, i, g  # i には1つの在庫データ（辞書）が入る
+        self.p, self.i, self.g = p, i, g
         self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
-        # 🎯 辞書から安全にデータを取得できるように完全にバグを解消しました
         orders[oid] = {
             "uid": it.user.id, 
             "g": self.g, 
@@ -173,7 +171,7 @@ class AdminView(discord.ui.View):
         p = next((x for x in GAME_DATA.get(o["g"], []) if x["product_key"] == o["key"]), None)
         if p: 
             p["stock_items"] = [x for x in p["stock_items"] if x["id"] != o["iid"]]
-            save_data()  # 在庫削除を保存
+            save_data()
             
         u = await bot.fetch_user(o["uid"])
         if u:
