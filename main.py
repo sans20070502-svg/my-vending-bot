@@ -67,17 +67,24 @@ class ItemSel(discord.ui.Select):
         opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in GAME_DATA.get(g, []) if len(x["stock_items"]) > 0]
         super().__init__(placeholder="選択してください" if opts else "売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     async def callback(self, it: discord.Interaction):
-        if not self.values or self.values == "none": return
+        if not self.values or self.values[0] == "none": return
         
-        selected_key = self.values
-        p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
+        # 🛠️ valuesから安全に文字列を抜き出す（リストでも文字列でも対応できるセーフティ処理）
+        selected_key = self.values[0] if isinstance(self.values, list) else self.values
+        
+        # 🛠️ 文字列の一致判定を極限まで柔軟にして、確実に商品枠を見つけるように修正
+        p = None
+        for x in GAME_DATA.get(self.g, []):
+            if str(x["product_key"]) == str(selected_key) or str(x["product_key"]) in str(selected_key) or str(selected_key) in str(x["product_key"]):
+                p = x
+                break
         
         if p and p["stock_items"]: 
-            # 🛠️ 在庫リストの「最初の1個（）」を確実に一時保存に引き渡す
-            user_selection[it.user.id] = {"p": p, "i": p["stock_items"], "g": self.g}
+            # 在庫リストの最初の1個（0番目）を確実に引き渡す
+            user_selection[it.user.id] = {"p": p, "i": p["stock_items"][0], "g": self.g}
             await it.response.send_modal(PayModal())
         else:
-            await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
+            await it.response.send_message(f"❌商品が売り切れたか、取得に失敗しました。(選択キー: {selected_key})", ephemeral=True)
 
 class VendView(discord.ui.View):
     def __init__(self, g):
@@ -107,13 +114,13 @@ class PayModal(discord.ui.Modal):
         p, i, g = sel["p"], sel["i"], sel["g"]
         oid = str(it.id)
         
-        # 🛠️ PayPayの入力値（self.inp.value）と一緒に、安全に取得した在庫データを記録します
+        # 注文を記録
         orders[oid] = {"uid": it.user.id, "g": g, "key": p["product_key"], "iid": i["id"], "name": p["display_name"], "data": i["data"], "price": p["price"], "url": self.inp.value}
         
-        # 1. タイムアウト防止のため即座に受付画面を返す
+        # タイムアウト防止のため即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
-        # 2. 通知処理を非同期で実行
+        # 通知処理を非同期で実行
         asyncio.create_task(send_notification_lazy(p["display_name"], p["price"], self.inp.value, it.user.id, oid))
         
         if it.user.id in user_selection:
