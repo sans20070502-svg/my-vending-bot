@@ -65,15 +65,15 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values[0] == "none": return
         
-        # 🛠️ self.values[0] を使って正確に選択されたキーを取得するように修正
+        # 🛠️ valuesはリスト形式なので、最初の1個を安全に取得
         selected_key = self.values[0]
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
+        # 🛠️ 在庫リスト丸ごとではなく、「最初の1個（[0]）」を確実にフォームに渡すよう修正
         if p and p["stock_items"]: 
-            # 🛠️ 在庫の最初の1個（[0]）を正しく渡すように修正
             await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
         else:
-            await it.response.send_message("❌商品の取得に失敗したか、売り切れました。", ephemeral=True)
+            await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
 
 class VendView(discord.ui.View):
     def __init__(self, g):
@@ -98,6 +98,7 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
+        # 🛠️ 渡された1個の在庫データから、安全にIDと中身を記録
         orders[oid] = {"uid": it.user.id, "g": self.g, "key": self.p["product_key"], "iid": self.i["id"], "name": self.p["display_name"], "data": self.i["data"], "price": self.p["price"], "url": self.inp.value}
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         await nt(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid)
