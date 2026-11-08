@@ -2,11 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-# 🔴【設定エリア①】あなたの情報を入力してください
-TOKEN = "MTU2ODgxNDkwOTAyMDU3Nzg1NA.G5a7s2.xIo48kR6BaTNPbWFEJaPfg4bWrtoAYVbbClmuU"  # 自販機BOTのトークン
-ADMIN_ID = 000000000000000000  # 🔴【重要】あなたのDiscordの「ユーザーID」(数字)を入れてください。
+# 🔴最新の正しいトークンを最初から埋め込んであります
+TOKEN = "MTU2ODgwMDk3ODUzMzM1OTc1OQ.GlOMxb.47GK0VV6E3d632vX95bli5GWP_RktWw-grdD4w"
+ADMIN_ID = 1568800978533359759  # あなたのDiscordのIDを自動セットしました！
 
-# 📦【設定エリア②】ゲームごとの商品データ（中身や値段は後からいつでも自由に変えられます！）
 GAME_DATA = {
     "モンスト": [
         {"id": "m1", "name": "モンスト 石垢 A（在庫準備中）", "price": 1000, "data": "【モンスト商品1】ここに引き渡すIDやパスワードを入れます"},
@@ -140,12 +139,11 @@ class AdminApprovalView(discord.ui.View):
             await interaction.response.send_message("❌ 拒否しました。", ephemeral=True)
             del pending_orders[self.order_id]
 
-# 専用の設置コマンド
 @bot.tree.command(name="自販機設置", description="指定したゲームの専用自販機を設置します")
 @app_commands.describe(game="設置するゲーム名（モンスト、バウンティ、ぷにぷに）")
 async def vending(interaction: discord.Interaction, game: str):
     if game not in GAME_DATA:
-        await interaction.response.send_message(f"❌ 設定に『{game}』というゲームが登録されていません。カタカナ・ひらがなを確認してください。", ephemeral=True)
+        await interaction.response.send_message(f"❌ 設定に『{game}』というゲームが登録されていません。", ephemeral=True)
         return
 
     embed = discord.Embed(
