@@ -14,7 +14,7 @@ threading.Thread(target=srv, daemon=True).start()
 
 # --- 🔑 2. 環境変数と設定 ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-# 🎯 あなたのDiscordユーザーIDを直接固定しました
+# 🎯 あなたのDiscordユーザーID
 ADMIN_ID = 1445106767796113478
 
 DATA_FILE = "vending_data.json"
@@ -100,7 +100,7 @@ async def vending(it: discord.Interaction, game: str):
         txt += f"`値段：{p['price']}円`\n{p['display_name']}\n\n"
     await it.response.send_message(embed=discord.Embed(title=f"🛒 {game} 自販機", description=txt if txt else "ただいま商品準備中です。", color=discord.Color.from_rgb(46, 204, 113)), view=VendView(game))
 
-# --- 🛒 6. UIコンポーモント（セレクトボックス・ボタン・モーダル） ---
+# --- 🛒 6. UIコンポーネント（セレクトボックス・ボタン・モーダル） ---
 
 class ItemSel(discord.ui.Select):
     def __init__(self, g):
@@ -109,11 +109,13 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        val = self.values
+        # ⚠️ self.valuesはリストなので最初の1つを取得
+        val = self.values[0] if self.values else "none"
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
+        # 🎯 在庫リストの最初の1つ（p["stock_items"][0]）を正しく渡すように修正しました
         if p and p["stock_items"]: 
-            await it.response.send_modal(PayModal(p, p["stock_items"], self.g))
+            await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
 
 class VendView(discord.ui.View):
     def __init__(self, g):
