@@ -24,7 +24,8 @@ def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except:
             return {}
     return {}
@@ -45,7 +46,6 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-# 指定したチャンネルへの新着申請通知
 async def nt(item, pr, url, uid, oid):
     try:
         ch = bot.get_channel(NOTIFY_CHANNEL_ID) or await bot.fetch_channel(NOTIFY_CHANNEL_ID)
@@ -110,7 +110,6 @@ class ItemSel(discord.ui.Select):
         if val == "none": return
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == val), None)
         
-        # 🎯 在庫リストの最初の1つ「[0]」を確実にモーダルに渡すよう完全修正しました！
         if p and p["stock_items"]: 
             target_item = p["stock_items"][0]
             await it.response.send_modal(PayModal(p, target_item, self.g))
@@ -182,7 +181,7 @@ class AdminView(discord.ui.View):
                 del orders[self.oid]
             except: 
                 await it.response.send_message("❌ ユーザーのDMが閉じているため送信に失敗しました", ephemeral=True)
-    
+
     @discord.ui.button(label="❌ 拒否する", style=discord.ButtonStyle.danger)
     async def dn_b(self, it: discord.Interaction, b: discord.ui.Button):
         o = orders.get(self.oid)
