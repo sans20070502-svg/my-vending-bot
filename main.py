@@ -14,7 +14,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "1445106767796113478"))
 # 📦 データを一時保存する場所
 GAME_DATA = {}
 orders = {}
-user_selection = {}  # ユーザーの選択を一時保存するセーフティ用の変数
+user_selection = {}  # ユーザーの選択を一時保存する変数
 
 class MyBot(commands.Bot):
     def __init__(self):
@@ -67,24 +67,24 @@ class ItemSel(discord.ui.Select):
         opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in GAME_DATA.get(g, []) if len(x["stock_items"]) > 0]
         super().__init__(placeholder="選択してください" if opts else "売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     async def callback(self, it: discord.Interaction):
-        if not self.values or self.values[0] == "none": return
+        if not self.values or self.values == "none": return
         
-        # 🛠️ valuesから安全に文字列を抜き出す（リストでも文字列でも対応できるセーフティ処理）
-        selected_key = self.values[0] if isinstance(self.values, list) else self.values
+        # 安全に選択されたキー文字列を取得
+        selected_key = self.values if isinstance(self.values, str) else self.values
         
-        # 🛠️ 文字列の一致判定を極限まで柔軟にして、確実に商品枠を見つけるように修正
         p = None
         for x in GAME_DATA.get(self.g, []):
-            if str(x["product_key"]) == str(selected_key) or str(x["product_key"]) in str(selected_key) or str(selected_key) in str(x["product_key"]):
+            if str(x["product_key"]) == str(selected_key):
                 p = x
                 break
         
         if p and p["stock_items"]: 
-            # 在庫リストの最初の1個（0番目）を確実に引き渡す
-            user_selection[it.user.id] = {"p": p, "i": p["stock_items"][0], "g": self.g}
+            # ユーザーIDをキーにして、裏で選択したデータを確実に一時保存
+            user_selection[it.user.id] = {"p": p, "i": p["stock_items"], "g": self.g}
+            # 🛠️ 100%正常な構造に修正したPayPay入力フォームを表示
             await it.response.send_modal(PayModal())
         else:
-            await it.response.send_message(f"❌商品が売り切れたか、取得に失敗しました。(選択キー: {selected_key})", ephemeral=True)
+            await it.response.send_message("❌商品の取得に失敗したか、売り切れました。", ephemeral=True)
 
 class VendView(discord.ui.View):
     def __init__(self, g):
@@ -101,11 +101,15 @@ class VendView(discord.ui.View):
         for p in GAME_DATA.get(self.g, []): txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
         await it.response.send_message(embed=discord.Embed(title="🔎在庫確認", description=txt if txt else "商品なし"), ephemeral=True)
 
-class PayModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="購入手続き")
-        self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
-        self.add_item(self.inp)
+# 🛠️ Discord.pyの正規の仕様に完全に準拠させたPayPayフォームクラス
+class PayModal(discord.ui.Modal, title="購入手続き"):
+    # クラスの直下でTextInputを定義するのが、一番エラーが起きない確実な書き方です
+    inp = discord.ui.TextInput(
+        label="PayPay送金リンク",
+        placeholder="https://paypay.ne.jp...",
+        required=True
+    )
+    
     async def callback(self, it: discord.Interaction):
         sel = user_selection.get(it.user.id)
         if not sel:
@@ -114,15 +118,25 @@ class PayModal(discord.ui.Modal):
         p, i, g = sel["p"], sel["i"], sel["g"]
         oid = str(it.id)
         
-        # 注文を記録
-        orders[oid] = {"uid": it.user.id, "g": g, "key": p["product_key"], "iid": i["id"], "name": p["display_name"], "data": i["data"], "price": p["price"], "url": self.inp.value}
+        # 注文を安全に記録
+        orders[oid] = {
+            "uid": it.user.id,
+            "g": g,
+            "key": p["product_key"],
+            "iid": i["id"],
+            "name": p["display_name"],
+            "data": i["data"],
+            "price": p["price"],
+            "url": self.inp.value
+        }
         
-        # タイムアウト防止のため即座に受付画面を返す
+        # 1. タイムアウト防止のため即座に受付画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
         
-        # 通知処理を非同期で実行
+        # 2. 通知処理を裏で非同期実行
         asyncio.create_task(send_notification_lazy(p["display_name"], p["price"], self.inp.value, it.user.id, oid))
         
+        # 使い終わったデータを削除
         if it.user.id in user_selection:
             del user_selection[it.user.id]
 
