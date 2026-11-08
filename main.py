@@ -1,10 +1,12 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import os
 
-# 🔴最新の正しいトークンを最初から埋め込んであります
-TOKEN = "MTU2ODgwMDk3ODUzMzM1OTc1OQ.GlOMxb.47GK0VV6E3d632vX95bli5GWP_RktWw-grdD4w"
-ADMIN_ID = 1568800978533359759  # あなたのDiscordのIDを自動セットしました！
+# 🔒 Renderの環境変数（Environment）から安全にトークンと管理者IDを読み込みます
+TOKEN = os.getenv("DISCORD_TOKEN")
+ADMIN_ID_STR = os.getenv("ADMIN_ID")
+ADMIN_ID = int(ADMIN_ID_STR) if ADMIN_ID_STR and ADMIN_ID_STR.isdigit() else 1568800978533359759
 
 GAME_DATA = {
     "モンスト": [
@@ -44,7 +46,7 @@ class ItemSelect(discord.ui.Select):
         self.game_name = game_name
 
     async def callback(self, interaction: discord.Interaction):
-        item_id = self.values
+        item_id = self.values[0] if self.values else None
         items = GAME_DATA.get(self.game_name, [])
         selected_item = next((item for item in items if item["id"] == item_id), None)
         
@@ -92,16 +94,19 @@ class PayPayModal(discord.ui.Modal):
             ephemeral=True
         )
 
-        admin = await bot.fetch_user(ADMIN_ID)
-        if admin:
-            embed = discord.Embed(title="🔔 新しい購入申請が届きました", color=discord.Color.gold())
-            embed.add_field(name="購入者", value=f"<@{interaction.user.id}>", inline=False)
-            embed.add_field(name="商品名", value=self.item["name"], inline=False)
-            embed.add_field(name="価格", value=f"{self.item['price']} 円", inline=False)
-            embed.add_field(name="PayPayリンク", value=paypay_url, inline=False)
-            
-            view = AdminApprovalView(order_id)
-            await admin.send(embed=embed, view=view)
+        try:
+            admin = await bot.fetch_user(ADMIN_ID)
+            if admin:
+                embed = discord.Embed(title="🔔 新しい購入申請が届きました", color=discord.Color.gold())
+                embed.add_field(name="購入者", value=f"<@{interaction.user.id}>", inline=False)
+                embed.add_field(name="商品名", value=self.item["name"], inline=False)
+                embed.add_field(name="価格", value=f"{self.item['price']} 円", inline=False)
+                embed.add_field(name="PayPayリンク", value=paypay_url, inline=False)
+                
+                view = AdminApprovalView(order_id)
+                await admin.send(embed=embed, view=view)
+        except Exception as e:
+            print(f"管理者への通知送信に失敗しました: {e}")
 
 class AdminApprovalView(discord.ui.View):
     def __init__(self, order_id):
@@ -158,4 +163,7 @@ async def vending(interaction: discord.Interaction, game: str):
 async def on_ready():
     print(f"自販機BOT起動完了: {bot.user.name}")
 
-bot.run(TOKEN)
+if TOKEN:
+    bot.run(TOKEN)
+else:
+    print("エラー: 環境変数 DISCORD_TOKEN が設定されていません。")
