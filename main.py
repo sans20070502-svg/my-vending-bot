@@ -38,7 +38,7 @@ pending_orders = {}
 class MyBot(commands.Bot):
  def __init__(self):
   intents = discord.Intents.default()
-  intents.message_content = True # 👈 クラッシュの元になる members=True を完全に削除しました
+  intents.message_content = True
   super().__init__(command_prefix="!", intents=intents)
  async def setup_hook(self):
   await self.tree.sync()
@@ -97,7 +97,7 @@ async def admin_check_stock(interaction: discord.Interaction, game: str):
   await interaction.response.send_message("❌ 運営者しか使用できません。", ephemeral=True)
   return
  if game not in GAME_DATA:
-  await interaction.response.send_message("❌ ゲームが見つかりません。", ephemeral=True)
+  await interaction.response.send_message("❌ ゲームが見つかりません。", immutable=True)
   return
  result_text = f"📋 【{game}】運営用データ確認ログ\n\n"
  for prod in GAME_DATA[game]:
@@ -136,7 +136,7 @@ class ItemSelect(discord.ui.Select):
   prod_key = self.values
   selected_prod = next((p for p in GAME_DATA.get(self.game_name, []) if p["product_key"] == prod_key), None)
   if selected_prod and selected_prod["stock_items"]:
-   item_data = selected_prod["stock_items"][0]
+   item_data = selected_prod["stock_items"]
    await interaction.response.send_modal(PayPayModal(selected_prod, item_data, self.game_name))
 
 class VendingView(discord.ui.View):
@@ -205,4 +205,7 @@ class AdminApprovalView(discord.ui.View):
   if order:
    user = await bot.fetch_user(order["user_id"])
    if user:
-    try: await user.send(f"❌ 【{order['item_name']}】の購入申請が拒否されました。")
+    try:
+     await user.send(f"❌ 【{order['item_name']}】の購入申請が拒否されました。")
+    except:
+     pass
