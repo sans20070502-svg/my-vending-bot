@@ -1,4 +1,4 @@
-import os, threading, uuid, discord
+import os, threading, uuid, discord, asyncio
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from discord.ext import commands
 from discord import app_commands as ap
@@ -23,13 +23,16 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-async def nt(item, pr, url, uid, oid):
+# 裏で通知を送るためのバックグラウンドタスク
+async def send_notification_lazy(item, pr, url, uid, oid):
+    await asyncio.sleep(0.5)  # フォームを閉じる処理を優先させるため少し待つ
     try:
         ad = await bot.fetch_user(ADMIN_ID)
         if ad:
             embed = discord.Embed(title="🔔新着申請", description=f"購入者:<@{uid}>\n商品:{item}\n価格:{pr}円\nリンク:{url}")
             await ad.send(embed=embed, view=AdminView(oid))
-    except: pass
+    except Exception as e:
+        print(f"通知DM送信エラー: {e}")
 
 # --- 🛠️ 1. 【新機能】商品枠そのものを新しく追加するコマンド ---
 @bot.tree.command(name="商品枠追加", description="【運営専用】新しい商品メニュー（枠）を作成します")
@@ -65,12 +68,11 @@ class ItemSel(discord.ui.Select):
     async def callback(self, it: discord.Interaction):
         if not self.values or self.values[0] == "none": return
         
-        # 🛠️ valuesはリスト形式なので、最初の1個を安全に取得
         selected_key = self.values[0]
         p = next((x for x in GAME_DATA.get(self.g, []) if x["product_key"] == selected_key), None)
         
-        # 🛠️ 在庫リスト丸ごとではなく、「最初の1個（[0]）」を確実にフォームに渡すよう修正
         if p and p["stock_items"]: 
+            # 最初の在庫アイテムを渡して即座にフォームを表示
             await it.response.send_modal(PayModal(p, p["stock_items"][0], self.g))
         else:
             await it.response.send_message("❌商品が売り切れたか、取得に失敗しました。", ephemeral=True)
@@ -98,10 +100,13 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     async def callback(self, it: discord.Interaction):
         oid = str(it.id)
-        # 🛠️ 渡された1個の在庫データから、安全にIDと中身を記録
         orders[oid] = {"uid": it.user.id, "g": self.g, "key": self.p["product_key"], "iid": self.i["id"], "name": self.p["display_name"], "data": self.i["data"], "price": self.p["price"], "url": self.inp.value}
+        
+        # 1. タイムアウトを防ぐため、最優先でユーザーに受付完了画面を返す
         await it.response.send_message("申請を受け付けました。確認後DMに送信されます。", ephemeral=True)
-        await nt(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid)
+        
+        # 2. 通知処理は裏（バックグラウンド）でゆっくり動かす
+        asyncio.create_task(send_notification_lazy(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid))
 
 class AdminView(discord.ui.View):
     def __init__(self, oid):
