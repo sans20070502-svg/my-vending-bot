@@ -41,8 +41,8 @@ orders = {}
 class MyBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True  # メッセージ内容の取得権限
-        intents.members = True          # DM送信やユーザー検索の権限
+        intents.message_content = True
+        intents.members = True
         super().__init__(command_prefix="!", intents=intents)
         
     async def setup_hook(self):
@@ -121,8 +121,9 @@ class ItemSel(discord.ui.Select):
         if val == "none": return
         p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
         
+        # 【修正】[0] を指定して、配列ではなく先頭の在庫「1件」だけを確実に引き渡す
         if p and p["stock_items"]: 
-            target_item = p["stock_items"][0]  # 在庫から1つ取り出す
+            target_item = p["stock_items"][0]
             await it.response.send_modal(PayModal(p, target_item))
 
 class VendView(discord.ui.View):
@@ -150,7 +151,7 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
-        # タイムアウト回避：即座に応答を返す（3秒の壁を突破）
+        # タイムアウト回避
         await it.response.defer(ephemeral=True)
         
         oid = str(it.id)
