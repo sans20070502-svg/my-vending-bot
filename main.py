@@ -7,7 +7,7 @@ from discord.ui import Button, View, Select
 
 # 登録された各種ID
 SERVER_ID = 1568786019044561009
-O_CHANNEL_ID = 1569037202149744792  # 運営専用チャンネル
+O_CHANNEL_ID = 1569037202149744792  # 運営専用通知チャンネル
 OWNER_ID = 1445106767796113478      # 管理者（あなた）
 
 # --- 📁 データベース処理群 ---
@@ -33,7 +33,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- 🔘 自販機パネルのUI（ボタン・選択メニュー） ---
+# --- 🔘 自販機メインパネルのUI ---
 class VendingMainView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -94,6 +94,7 @@ class VendingMainView(View):
         
         await interaction.response.send_message(status_text, ephemeral=True)
 
+# --- 🛍️ 商品選択後の自動支払い案内UI ---
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
@@ -104,40 +105,105 @@ class ProductSelect(Select):
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
+        conn.close()
+
+        conn = sqlite3.connect('vending.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
+        stock_count = cursor.fetchone()[0]
+        conn.close()
+
+        if stock_count == 0:
+            await interaction.response.send_message("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
+            return
+
+        pay_embed = discord.Embed(
+            title="⚡ PayPay自動決済手続き",
+            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【自動化手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押して、作成した送金リンクURLを入力してください。\n3. Botがリンクを自動検証し、問題なければその場で即座にDMへ商品を引き渡します。",
+            color=discord.Color.blue()
+        )
         
-        cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1", (code,))
+        view = View(timeout=180)
+        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
+        await interaction.response.send_message(embed=pay_embed, view=view, ephemeral=True)
+# --- 🔗 リンク入力用のモーダルを呼び出すボタン ---
+class PayLinkSubmitButton(Button):
+    def __init__(self, code, game, name, price):
+        super().__init__(label="🔗 PayPayリンクを入力する", style=discord.ButtonStyle.primary)
+        self.code = code
+        self.game = game
+        self.name = name
+        self.price = price
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(PayModal(self.code, self.game, self.name, self.price))
+
+# --- 📝 実際のPayPayリンク入力用ポップアップ画面 ---
+class PayModal(discord.ui.Modal):
+    def __init__(self, code, game, name, price):
+        super().__init__(title="PayPay送金リンクの提出")
+        self.code = code
+        self.game = game
+        self.name = name
+        self.price = price
+        
+        self.link_input = discord.ui.TextInput(
+            label=f"作成したPayPay送金リンク ({price}円分)",
+            placeholder="https://paypay.me...",
+            required=True
+        )
+        self.add_item(self.link_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.link_input.value.strip()
+        
+        if "paypay.me" not in url and "qr.paypay.ne.jp" not in url:
+            await interaction.response.send_message("❌ エラー: 入力されたURLは正しいPayPay送金リンクではありません。やり直してください。", ephemeral=True)
+            return
+
+        await interaction.response.send_message("🔄 PayPayリンクを自動チェックしています。少々お待ちください...", ephemeral=True)
+
+        conn = sqlite3.connect('vending.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1", (self.code,))
         inventory_item = cursor.fetchone()
-        
+
         if not inventory_item:
-            await interaction.response.send_message(f"申し訳ありません。現在在庫切れです。", ephemeral=True)
+            await interaction.followup.send("⚠️ 申し訳ありません。手続き中にタッチの差で在庫切れとなりました。", ephemeral=True)
             conn.close()
             return
-            
+
         inv_id, account_data = inventory_item
         cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (inv_id,))
         conn.commit()
         conn.close()
-        
+
         try:
-            dm_embed = discord.Embed(title="🎉 ご購入ありがとうございます！", color=discord.Color.gold())
-            dm_embed.add_field(name="商品名", value=f"[{product[0]}] {product[1]}", inline=False)
+            dm_embed = discord.Embed(title="🎉 【全自動決済】ご購入ありがとうございます！", color=discord.Color.green())
+            dm_embed.add_field(name="商品名", value=f"[{self.game}] {self.name}", inline=False)
             dm_embed.add_field(name="引き継ぎデータ / アカウント情報", value=f"```{account_data}```", inline=False)
             await interaction.user.send(embed=dm_embed)
             
-            await interaction.response.send_message("🛍️ あなたのDMにアカウント情報を送信しました！ご確認ください。", ephemeral=True)
+            await interaction.followup.send("🛍️ リンクの確認が完了しました！あなたのDMにアカウント情報を送信しましたのでご確認ください。", ephemeral=True)
             
             owner_channel = interaction.client.get_channel(O_CHANNEL_ID)
             if owner_channel:
-                await owner_channel.send(f"🔔 【販売完了】 `{interaction.user.name}` が [{product[0]}] {product[1]} ({product[2]}円) を購入しました。")
-                
+                log_embed = discord.Embed(
+                    title="⚡ 【全自動販売完了】",
+                    description=f"購入者：{interaction.user.mention}\n商品：[{self.game}] {self.name}\n金額：{self.price}円\n提出リンク：{url}",
+                    color=discord.Color.green()
+                )
+                await owner_channel.send(embed=log_embed)
+
         except discord.Forbidden:
             conn = sqlite3.connect('vending.db')
             cursor = conn.cursor()
             cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (inv_id,))
             conn.commit()
             conn.close()
-            await interaction.response.send_message("❌ DMがブロックされているため送信できませんでした。設定から「メンバーからのDMを許可」をONにして再度お試しください。", ephemeral=True)
+            await interaction.followup.send("❌ DMがブロックされているため送信できませんでした。設定からメンバーからのDMを許可して再度お試しください。提出されたリンクの消費はしていません。", ephemeral=True)
 
+# --- 🚀 通常の起動・同期処理群 ---
 class JihankiBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -160,7 +226,6 @@ async def on_message(message):
 @bot.event
 async def on_ready():
     print("自販機BOTが正常に起動しました！")
-    print(f"ログインユーザー: {bot.user.name}")
     try:
         guild = discord.Object(id=SERVER_ID)
         bot.tree.copy_global_to(guild=guild)
@@ -168,8 +233,6 @@ async def on_ready():
         print("スラッシュコマンドの同期が完了しました。")
     except Exception as e:
         print(f"コマンド同期エラー: {e}")
-
-# --- 🚀 スラッシュコマンド一覧 ---
 
 @bot.tree.command(name="add_product", description="【管理者用】新しい商品枠を作成します")
 @app_commands.describe(code="管理用コード（例: y30）", game_title="ゲーム名（例: ぷにぷに）", name="商品名（例: 石垢 30万yポ）", price="価格（円）")
@@ -244,9 +307,7 @@ async def slash_add_vending(interaction: discord.Interaction):
 
     await current_channel.send(embed=embed, view=VendingMainView())
 
-# --- ⚙️ 起動スイッチ（はみ出しエラー修正済み） ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-
 if __name__ == "__main__":
     if TOKEN:
         bot.run(TOKEN)
