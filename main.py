@@ -55,7 +55,7 @@ class VendingMainView(View):
             conn = sqlite3.connect('vending.db')
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-            stock_count = c.fetchone()[0]
+            stock_count = c.fetchone()
             conn.close()
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -85,9 +85,9 @@ class VendingMainView(View):
         status_text = "📊 **現在の在庫状況一覧** 📊\n━━━━━━━━━━━━━━━━━━\n"
         for code, game, name in products:
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-            un_count = cursor.fetchone()[0]
+            un_count = cursor.fetchone()
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
-            so_count = cursor.fetchone()[0]
+            so_count = cursor.fetchone()
             status_text += f"● **[{game}] {name}** (コード: `{code}`)\n   └ 在庫: **{un_count}個** | 累計販売数: {so_count}個\n"
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
@@ -100,7 +100,7 @@ class ProductSelect(Select):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        code = self.values[0]
+        code = self.values
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
@@ -110,7 +110,7 @@ class ProductSelect(Select):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-        stock_count = cursor.fetchone()[0]
+        stock_count = cursor.fetchone()
         conn.close()
 
         if stock_count == 0:
@@ -119,12 +119,12 @@ class ProductSelect(Select):
 
         pay_embed = discord.Embed(
             title="⚡ PayPay自動決済手続き",
-            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【自動化手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押して、作成した送金リンクURLを入力してください。\n3. Botがリンクを自動検証し、問題なければその場で即座にDMへ商品を引き渡します。",
+            description=f"商品：**[{product}] {product}**\n価格：**{product}円**\n\n【自動化手順】\n1. あなたのPayPayアプリで「**{product}円の送金リンク**」を作成してください。\n2. 下のボタンを押して、作成した送金リンクURLを入力してください。\n3. Botがリンクを自動検証し、問題なければその場で即座にDMへ商品を引き渡します。",
             color=discord.Color.blue()
         )
         
         view = View(timeout=180)
-        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
+        view.add_item(PayLinkSubmitButton(code, product, product, product))
         await interaction.response.send_message(embed=pay_embed, view=view, ephemeral=True)
 # --- 🔗 リンク入力用のモーダルを呼び出すボタン ---
 class PayLinkSubmitButton(Button):
@@ -157,7 +157,8 @@ class PayModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         url = self.link_input.value.strip()
         
-        if "paypay.me" not in url and "qr.paypay.ne.jp" not in url:
+        # 🔍 pay.paypay.ne.jp 形式も新しく許可対象に追加して強化
+        if "paypay.me" not in url and "qr.paypay.ne.jp" not in url and "pay.paypay.ne.jp" not in url:
             await interaction.response.send_message("❌ エラー: 入力されたURLは正しいPayPay送金リンクではありません。やり直してください。", ephemeral=True)
             return
 
@@ -268,7 +269,7 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     cursor.execute("INSERT INTO inventory (product_code, account_data) VALUES (?, ?)", (code, account_data))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
+    await interaction.response.send_message(f"✅ 「[{product}] {product}」に在庫を追加しました！", ephemeral=True)
 
 @bot.tree.command(name="add_vending", description="【管理者用】このコマンドを打ったチャンネルに自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
