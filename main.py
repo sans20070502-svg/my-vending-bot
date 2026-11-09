@@ -5,8 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View, Select
 
-# 登録された各種ID
-SERVER_ID = 1568786019044561009
+# 👑 サーバーIDを自動取得にするため、SERVER_ID の固定設定を削除しました！
 OWNER_ID = 1445106767796113478      # 管理者（あなた）のユーザーID
 
 # --- データベース処理群 ---
@@ -154,7 +153,6 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.link_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # 👑 【最重要】まず最初に応答を確保（defer）して、3秒制限による404エラーを100%回避！
         await interaction.response.defer(ephemeral=True)
         url = self.link_input.value.strip()
         
@@ -204,7 +202,6 @@ class PayModal(discord.ui.Modal):
             view.add_item(AdminCancelButton(interaction.user.id, url))
             
             await owner.send(embed=admin_embed, view=view)
-            # すでにdeferしているので、followup.send を使って遅延なく綺麗に返答を返します
             await interaction.followup.send("✅ PayPayリンクの提出を確認しました！管理者が確認いたします。承認されてデータが届くまで少々お待ちください。", ephemeral=True)
             
         except discord.Forbidden:
@@ -267,7 +264,6 @@ class AdminApproveButton(Button):
 # --- 運営用：拒否ボタンの処理 ---
 class AdminCancelButton(Button):
     def __init__(self, user_id, paypay_url):
-        # 変数名を url から paypay_url に修正してエラーを完全防止
         super().__init__(label="❌ 拒否（リンク返却）", style=discord.ButtonStyle.danger, custom_id=f"adm_can_{user_id}")
         self.user_id = user_id
         self.paypay_url = paypay_url
@@ -320,13 +316,6 @@ async def on_message(message):
 async def on_ready():
     print("自販機BOTが正常に起動しました！")
     print(f"ログインユーザー: {bot.user.name}")
-    try:
-        guild = discord.Object(id=SERVER_ID)
-        bot.tree.copy_global_to(guild=guild)
-        await bot.tree.sync(guild=guild)
-        print("スラッシュコマンドの同期が完了しました。")
-    except Exception as e:
-        print(f"コマンド同期エラー: {e}")
 
 # --- スラッシュコマンドの実装群 ---
 
@@ -336,14 +325,16 @@ async def slash_add_product(interaction: discord.Interaction, code: str, game_ti
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO products (code, game_title, name, price) VALUES (?, ?, ?, ?)", (code, game_title, name, price))
         conn.commit()
-        await interaction.response.send_message(f"✅ 商品を登録しました！\nコード: `{code}` | [{game_title}] {name} ({price}円)", ephemeral=True)
+        await bot.tree.sync(guild=interaction.guild) # 👑その場でサーバーに同期
+        await interaction.followup.send(f"✅ 商品を登録しました！\nコード: `{code}` | [{game_title}] {name} ({price}円)", ephemeral=True)
     except sqlite3.IntegrityError:
-        await interaction.response.send_message(f"❌ エラー: コード `{code}` は既に使われています。", ephemeral=True)
+        await interaction.followup.send(f"❌ エラー: コード `{code}` は既に使われています。", ephemeral=True)
     finally:
         conn.close()
 
@@ -353,18 +344,20 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (code,))
     product = cursor.fetchone()
     if not product:
-        await interaction.response.send_message(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
+        await interaction.followup.send(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
         conn.close()
         return
     cursor.execute("INSERT INTO inventory (product_code, account_data) VALUES (?, ?)", (code, account_data))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
+    await bot.tree.sync(guild=interaction.guild) # 👑その場でサーバーに同期
+    await interaction.followup.send(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
 
 @bot.tree.command(name="delete_product", description="【管理者用】指定した商品を完全に削除します")
 @app_commands.describe(code="削除したい商品の管理用コード（例: y30）")
@@ -372,19 +365,21 @@ async def slash_delete_product(interaction: discord.Interaction, code: str):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (code,))
     product = cursor.fetchone()
     if not product:
-        await interaction.response.send_message(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
+        await interaction.followup.send(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
         conn.close()
         return
     cursor.execute("DELETE FROM products WHERE code = ?", (code,))
     cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🗑️ 商品「[{product[0]}] {product[1]}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
+    await bot.tree.sync(guild=interaction.guild) # 👑その場でサーバーに同期
+    await interaction.followup.send(f"🗑️ 商品「[{product[0]}] {product[1]}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
 
 @bot.tree.command(name="add_vending", description="【管理者用】このコマンドを打ったチャンネルに自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
@@ -392,7 +387,7 @@ async def slash_add_vending(interaction: discord.Interaction):
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
     current_channel = interaction.channel
-    await interaction.response.send_message("✅ 自販機メインパネルを設置中...", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
     
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
@@ -419,7 +414,9 @@ async def slash_add_vending(interaction: discord.Interaction):
             inline=False
         )
     embed.set_footer(text="※ご購入前にDMの受信設定をご確認ください。")
+    await bot.tree.sync(guild=interaction.guild) # 👑現在のサーバーに完璧に同期
     await current_channel.send(embed=embed, view=VendingMainView())
+    await interaction.followup.send("✅ 自販機メインパネルを設置しました！", ephemeral=True)
 
 # --- 起動処理 ---
 TOKEN = os.getenv("DISCORD_TOKEN")
