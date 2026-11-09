@@ -98,6 +98,7 @@ class VendingMainView(View):
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
         await interaction.followup.send(status_text, ephemeral=True)
+
 # --- 商品選択後の支払い案内UI ---
 class ProductSelect(Select):
     def __init__(self, options):
@@ -105,14 +106,14 @@ class ProductSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        code = self.values
+        code = self.values[0]
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-        stock_count = cursor.fetchone()
+        stock_count = cursor.fetchone()[0]
         conn.close()
         
         if stock_count == 0:
@@ -121,11 +122,40 @@ class ProductSelect(Select):
             
         pay_embed = discord.Embed(
             title="PayPay決済手続き",
-            description=f"商品：**[{product}] {product}**\n価格：**{product}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
+            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
             color=discord.Color.blue()
         )
         view = View(timeout=180)
-        view.add_item(PayLinkSubmitButton(code, product, product, product))
+        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
+        await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
+# --- 商品選択後の支払い案内UI ---
+class ProductSelect(Select):
+    def __init__(self, options):
+        super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        code = self.values[0]
+        
+        conn = sqlite3.connect('vending.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
+        product = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
+        stock_count = cursor.fetchone()[0]
+        conn.close()
+        
+        if stock_count == 0:
+            await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
+            return
+            
+        pay_embed = discord.Embed(
+            title="PayPay決済手続き",
+            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
+            color=discord.Color.blue()
+        )
+        view = View(timeout=180)
+        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
         await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
 
 class PayLinkSubmitButton(Button):
@@ -164,7 +194,7 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        already_used = cursor.fetchone()
+        already_used = cursor.fetchone()[0]
         
         if already_used > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
@@ -183,7 +213,6 @@ class PayModal(discord.ui.Modal):
         
         try:
             owner = await interaction.client.fetch_user(OWNER_ID)
-            
             conn = sqlite3.connect('vending.db')
             cursor = conn.cursor()
             cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
@@ -246,7 +275,7 @@ class AdminApproveButton(Button):
             dm_embed.add_field(name="引き継ぎデータ / アカウント情報", value=f"```{account_data}```", inline=False)
             await buyer.send(embed=dm_embed)
             
-            edited_embed = interaction.message.embeds
+            edited_embed = interaction.message.embeds[0]
             edited_embed.title = "✅ 【取引完了】承認・引き渡し済み"
             edited_embed.color = discord.Color.green()
             await interaction.message.edit(embed=edited_embed, view=None)
@@ -287,7 +316,7 @@ class AdminCancelButton(Button):
         except:
             pass
             
-        edited_embed = interaction.message.embeds
+        edited_embed = interaction.message.embeds[0]
         edited_embed.title = "❌ 【取引拒否】リンクは却下されました"
         edited_embed.color = discord.Color.red()
         await interaction.message.edit(embed=edited_embed, view=None)
@@ -361,7 +390,7 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     cursor.execute("INSERT INTO inventory (product_code, account_data) VALUES (?, ?)", (code, account_data))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ 「[{product}] {product}」に在庫を追加しました！", ephemeral=True)
+    await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
 
 @bot.tree.command(name="delete_product", description="【管理者用】指定した商品を完全に削除します")
 @app_commands.describe(code="削除したい商品の管理用コード（例: y30）")
@@ -381,7 +410,7 @@ async def slash_delete_product(interaction: discord.Interaction, code: str):
     cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🗑️ 商品「[{product}] {product}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
+    await interaction.response.send_message(f"🗑️ 商品「[{product[0]}] {product[1]}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
 
 @bot.tree.command(name="add_vending", description="【管理者用】このコマンドを打ったチャンネルに自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
