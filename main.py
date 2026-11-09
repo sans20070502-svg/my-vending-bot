@@ -117,12 +117,11 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        # リストから「0番目の文字列」を確実に抽出
         val = self.values[0] if self.values else "none"
         if val == "none": return
         p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
         
-        # 配列の先頭から在庫オブジェクトを1つだけ安全に切り出して引き渡す
+        # 【最重要修正】 リストの塊ではなく「[0]番目の在庫（辞書オブジェクト単体）」を確実に渡す
         if p and p["stock_items"]: 
             target_item = p["stock_items"][0]
             await it.response.send_modal(PayModal(p, target_item))
@@ -152,7 +151,6 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
-        # フォーム送信後の4秒かかる外部連携の前に即座に応答（ここはmodalのcallbackなので正しく動きます）
         await it.response.defer(ephemeral=True)
         
         oid = str(it.id)
