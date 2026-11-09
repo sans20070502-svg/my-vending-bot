@@ -40,7 +40,6 @@ class VendingMainView(View):
 
     @discord.ui.button(label="🟢 購入する", style=discord.ButtonStyle.success, custom_id="btn_buy_main")
     async def buy_button(self, interaction: discord.Interaction, button: Button):
-        # 💡 【3秒ルール対策】まず最初に応答を返してタイムアウトを絶対に防ぎます！
         await interaction.response.defer(ephemeral=True)
 
         conn = sqlite3.connect('vending.db')
@@ -71,12 +70,10 @@ class VendingMainView(View):
         view = View(timeout=60)
         select = ProductSelect(options)
         view.add_item(select)
-        # deferをした後は「followup.send」でメッセージを送ります
         await interaction.followup.send("購入したい商品を選択してください：", view=view, ephemeral=True)
 
     @discord.ui.button(label="🔍 在庫・販売数の確認", style=discord.ButtonStyle.primary, custom_id="btn_stock_main")
     async def stock_button(self, interaction: discord.Interaction, button: Button):
-        # 💡 【3秒ルール対策】ここも最初に応答を返してエラーを防ぎます
         await interaction.response.defer(ephemeral=True)
 
         conn = sqlite3.connect('vending.db')
@@ -144,7 +141,6 @@ class PayLinkSubmitButton(Button):
         self.price = price
 
     async def callback(self, interaction: discord.Interaction):
-        # ポップアップ(Modal)を呼び出す時だけはdeferせず、そのまま呼び出します
         await interaction.response.send_modal(PayModal(self.code, self.game, self.name, self.price))
 
 class PayModal(discord.ui.Modal):
@@ -256,6 +252,23 @@ async def slash_add_product(interaction: discord.Interaction, code: str, game_ti
         await interaction.response.send_message(f"❌ エラー: コード `{code}` は既に使われています。", ephemeral=True)
     finally:
         conn.close()
+
+# --- 🗑️ 【新機能】登録した商品をいつでも消せる削除コマンド ---
+@bot.tree.command(name="delete_product", description="【管理者用】商品をデータベースから完全に削除します")
+@app_commands.describe(code="削除したい商品の管理用コード（例: y30）")
+async def slash_delete_product(interaction: discord.Interaction, code: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("権限がありません。", ephemeral=True)
+        return
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    # 商品枠を消す
+    cursor.execute("DELETE FROM products WHERE code = ?", (code,))
+    # その商品に紐づいていた在庫データもまとめて消す
+    cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f"🗑️ コード `{code}` の商品と在庫をサーバーから完全に削除しました！", ephemeral=True)
 
 @bot.tree.command(name="add_stock", description="【管理者用】指定した商品の在庫を追加します")
 @app_commands.describe(code="対象商品の管理用コード（例: y30）", account_data="アカウントの引き継ぎ情報")
