@@ -60,7 +60,7 @@ class VendingMainView(View):
             conn = sqlite3.connect('vending.db')
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-            stock_count = c.fetchone()[0]
+            stock_count = c.fetchone()
             conn.close()
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -91,9 +91,9 @@ class VendingMainView(View):
         status_text = "現在の在庫状況一覧\n━━━━━━━━━━━━━━━━━━\n"
         for code, game, name in products:
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-            un_count = cursor.fetchone()[0]
+            un_count = cursor.fetchone()
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
-            so_count = cursor.fetchone()[0]
+            so_count = cursor.fetchone()
             status_text += f"● [{game}] {name} (コード: {code})\n   └ 在庫: {un_count}個 | 累計販売数: {so_count}個\n"
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
@@ -106,14 +106,14 @@ class ProductSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        code = self.values[0]
+        code = self.values
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-        stock_count = cursor.fetchone()[0]
+        stock_count = cursor.fetchone()
         conn.close()
         
         if stock_count == 0:
@@ -122,15 +122,14 @@ class ProductSelect(Select):
             
         pay_embed = discord.Embed(
             title="PayPay決済手続き",
-            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
+            description=f"商品：**[{product}] {product}**\n価格：**{product}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
             color=discord.Color.blue()
         )
         view = View(timeout=180)
-        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
+        view.add_item(PayLinkSubmitButton(code, product, product, product))
         await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
 class PayLinkSubmitButton(Button):
     def __init__(self, code, game, name, price):
-        # 識別用ID（custom_id）は設定せず、ボタン処理のみに修正してエラーを完全防止
         super().__init__(label="PayPayリンクを入力する", style=discord.ButtonStyle.primary)
         self.code = code
         self.game = game
@@ -155,6 +154,7 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.link_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 👑 【最重要】まず最初に応答を確保（defer）して、3秒制限による404エラーを100%回避！
         await interaction.response.defer(ephemeral=True)
         url = self.link_input.value.strip()
         
@@ -165,7 +165,7 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        already_used = cursor.fetchone()[0]
+        already_used = cursor.fetchone()
         
         if already_used > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
@@ -204,6 +204,7 @@ class PayModal(discord.ui.Modal):
             view.add_item(AdminCancelButton(interaction.user.id, url))
             
             await owner.send(embed=admin_embed, view=view)
+            # すでにdeferしているので、followup.send を使って遅延なく綺麗に返答を返します
             await interaction.followup.send("✅ PayPayリンクの提出を確認しました！管理者が確認いたします。承認されてデータが届くまで少々お待ちください。", ephemeral=True)
             
         except discord.Forbidden:
@@ -247,7 +248,7 @@ class AdminApproveButton(Button):
             dm_embed.add_field(name="引き継ぎデータ / アカウント情報", value=f"```{account_data}```", inline=False)
             await buyer.send(embed=dm_embed)
             
-            edited_embed = interaction.message.embeds[0]
+            edited_embed = interaction.message.embeds
             edited_embed.title = "✅ 【取引完了】承認・引き渡し済み"
             edited_embed.color = discord.Color.green()
             await interaction.message.edit(embed=edited_embed, view=None)
@@ -265,10 +266,11 @@ class AdminApproveButton(Button):
 
 # --- 運営用：拒否ボタンの処理 ---
 class AdminCancelButton(Button):
-    def __init__(self, user_id, url):
+    def __init__(self, user_id, paypay_url):
+        # 変数名を url から paypay_url に修正してエラーを完全防止
         super().__init__(label="❌ 拒否（リンク返却）", style=discord.ButtonStyle.danger, custom_id=f"adm_can_{user_id}")
         self.user_id = user_id
-        self.url = url
+        self.paypay_url = paypay_url
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -278,7 +280,7 @@ class AdminCancelButton(Button):
             
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM used_links WHERE link = ?", (self.url,))
+        cursor.execute("DELETE FROM used_links WHERE link = ?", (self.paypay_url,))
         conn.commit()
         conn.close()
         
@@ -288,7 +290,7 @@ class AdminCancelButton(Button):
         except:
             pass
             
-        edited_embed = interaction.message.embeds[0]
+        edited_embed = interaction.message.embeds
         edited_embed.title = "❌ 【取引拒否】リンクは却下されました"
         edited_embed.color = discord.Color.red()
         await interaction.message.edit(embed=edited_embed, view=None)
