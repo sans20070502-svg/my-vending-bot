@@ -124,14 +124,26 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
+        # 1. 選択された配列から「0番目(文字列)」を確実に抽出
         val = self.values[0] if self.values else "none"
-        if val == "none": return
+        if val == "none":
+            return await it.response.send_message("❌商品が正しく選択されませんでした。", ephemeral=True)
+            
         p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
         
-        # 【修正完了】完全に1つの在庫オブジェクト（辞書型）だけを確実に抽出してモーダルに引き渡す
+        # 2. 在庫配列の「0番目(単一の辞書データ)」だけを確実に抽出してモーダルに引き渡す
         if p and p["stock_items"]: 
             target_item = p["stock_items"][0]
-            await it.response.send_modal(PayModal(p, target_item))
+            try:
+                # モーダル画面を即座にポップアップ表示（これで3秒制限を即クリア）
+                await it.response.send_modal(PayModal(p, target_item))
+            except Exception as e:
+                print(f"Modal起動エラー: {e}")
+                if not it.response.is_done():
+                    await it.response.send_message("❌入力画面の起動に失敗しました。もう一度お試しください。", ephemeral=True)
+        else:
+            # 在庫が切れていた場合も、応答なしにせず確実にメッセージを返す
+            await it.response.send_message("❌申し訳ありません、この商品はタッチの差で売り切れました。", ephemeral=True)
 
 class VendView(discord.ui.View):
     def __init__(self):
@@ -139,19 +151,17 @@ class VendView(discord.ui.View):
     
     @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.blurple, custom_id="v_buy_puni")
     async def b1(self, it: discord.Interaction, b: discord.ui.Button):
-        # 【最重要：修正】ボタンを押した瞬間のタイムアウトを完全に回避するため即時応答
-        await it.response.defer(ephemeral=True)
+        # メッセージ送信形式で即時応答を返すことで、セレクトメニューのタイムアウトを完全に防止
         v = discord.ui.View()
         v.add_item(ItemSel())
-        await it.followup.send("ぷにぷにの商品リスト：", view=v, ephemeral=True)
+        await it.response.send_message("ぷにぷにの商品リスト：", view=v, ephemeral=True)
     
     @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="v_st_puni")
     async def b2(self, it: discord.Interaction, b: discord.ui.Button):
-        await it.response.defer(ephemeral=True)
         txt = ""
         for p in PUNI_DATA: 
             txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
-        await it.followup.send(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
+        await it.response.send_message(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
 
 class PayModal(discord.ui.Modal):
     def __init__(self, p, i):
