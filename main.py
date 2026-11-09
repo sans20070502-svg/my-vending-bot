@@ -110,7 +110,7 @@ class ProductSelect(Select):
         inventory_item = cursor.fetchone()
         
         if not inventory_item:
-            await interaction.response.send_message(f"申し訳ありません。現在在庫切れです。", ephemeral=True)
+            await interaction.response.send_message(f"申し訳ありません。 「{product[1]}」は現在在庫切れです。", ephemeral=True)
             conn.close()
             return
             
@@ -208,24 +208,27 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     conn.close()
     await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
 
-# --- 🏪 【新機能】スラッシュコマンドで自販機を設置する ---
+# --- 🏪 【バグ修正版】スラッシュコマンドで自販機を設置する ---
 @bot.tree.command(name="add_vending", description="【管理者用】指定されたチャンネルに自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
         
-    embed = discord.Embed(
-        title="🏪 アカウント自動販売機",
-        description="下の「購入する」ボタンを押すと、現在販売中の商品メニューが表示されます。\n購入後、アカウントデータは自動的にDMで送信されます。",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text="※ご購入前にDMの受信設定をご確認ください。")
-    
-    target_channel = bot.get_channel(J_CHANNEL_ID)
+    target_channel = interaction.client.get_channel(J_CHANNEL_ID)
     if target_channel:
+        # まず最初に応答を完了させてタイムアウトを防ぐ（他の人には見えないメッセージ）
+        await interaction.response.send_message("✅ 自販機メインパネルを設置しています...", ephemeral=True)
+        
+        embed = discord.Embed(
+            title="🏪 アカウント自動販売機",
+            description="下の「購入する」ボタンを押すと、現在販売中の商品メニューが表示されます。\n購入後、アカウントデータは自動的にDMで送信されます。",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="※ご購入前にDMの受信設定をご確認ください。")
+        
+        # 実際の自販機部屋にパネルを送信
         await target_channel.send(embed=embed, view=VendingMainView())
-        await interaction.response.send_message("✅ 指定されたチャンネルに自販機メインパネルを設置しました！", ephemeral=True)
     else:
         await interaction.response.send_message("❌ エラー: 指定されたチャンネルIDが見つかりませんでした。", ephemeral=True)
 
