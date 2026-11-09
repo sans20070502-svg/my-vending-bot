@@ -51,9 +51,11 @@ class VendingMainView(View):
         cursor.execute("SELECT code, game_title, name, price FROM products")
         products = cursor.fetchall()
         conn.close()
+        
         if not products:
             await interaction.followup.send("現在、販売中の商品はございません。", ephemeral=True)
             return
+            
         options = []
         for code, game, name, price in products:
             conn = sqlite3.connect('vending.db')
@@ -61,12 +63,14 @@ class VendingMainView(View):
             c.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             stock_count = c.fetchone()[0]
             conn.close()
+            
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
             options.append(discord.SelectOption(
                 label=f"[{game}] {name}",
                 description=f"価格: {price}円 ({stock_status})",
                 value=code
             ))
+            
         view = View(timeout=60)
         select = ProductSelect(options)
         view.add_item(select)
@@ -79,10 +83,12 @@ class VendingMainView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT code, game_title, name FROM products")
         products = cursor.fetchall()
+        
         if not products:
             await interaction.followup.send("📊 現在登録されている商品はありません。", ephemeral=True)
             conn.close()
             return
+            
         status_text = "📊 **現在の在庫状況一覧** 📊\n━━━━━━━━━━━━━━━━━━\n"
         for code, game, name in products:
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
@@ -101,19 +107,19 @@ class ProductSelect(Select):
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         code = self.values[0]
+        
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
-        conn.close()
-        conn = sqlite3.connect('vending.db')
-        cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
         stock_count = cursor.fetchone()[0]
         conn.close()
+        
         if stock_count == 0:
             await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
             return
+            
         pay_embed = discord.Embed(
             title="⚡ PayPay決済手続き",
             description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
@@ -151,32 +157,39 @@ class PayModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         url = self.link_input.value.strip()
+        
         if "paypay.me" not in url and "qr.paypay.ne.jp" not in url and "pay.paypay.ne.jp" not in url:
             await interaction.followup.send("❌ エラー: 正しいPayPay送金リンクではありません。", ephemeral=True)
             return
+            
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
         already_used = cursor.fetchone()[0]
+        
         if already_used > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
             conn.close()
             return
+            
         cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1", (self.code,))
         inventory_item = cursor.fetchone()
+        
         if not inventory_item:
             await interaction.followup.send("⚠️ 申し訳ありません。在庫切れとなりました。", ephemeral=True)
             conn.close()
             return
-        inv_id, account_data = inventory_item
+            
         conn.close()
         owner_channel = interaction.client.get_channel(O_CHANNEL_ID)
+        
         if owner_channel:
             conn = sqlite3.connect('vending.db')
             cursor = conn.cursor()
             cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
             conn.commit()
             conn.close()
+            
             admin_embed = discord.Embed(
                 title="💰 【安全決済】入金リンクが届きました",
                 description=f"購入者：{interaction.user.mention} (`{interaction.user.name}`)\n商品：[{self.game}] {self.name}\n設定価格：**{self.price}円**\n\n👇 **下のリンクをタップしてPayPayを受け取ってください**",
@@ -184,52 +197,100 @@ class PayModal(discord.ui.Modal):
             )
             admin_embed.add_field(name="🔗 お客さんが提出したPayPayリンク", value=url, inline=False)
             admin_embed.set_footer(text="入金が確認できたら、下の「承認（DM引き渡し）」を押してください。キャンセル詐欺を100%防げます。")
+            
             view = View(timeout=None)
-            view.add_item(AdminApproveButton(interaction.user.id, inv_id, self.game, self.name, account_data))
+            view.add_item(AdminApproveButton(interaction.user.id, self.code, self.game, self.name))
+            view.add_item(AdminCancelButton(interaction.user.id, url))
+            
             await owner_channel.send(embed=admin_embed, view=view)
-            await interaction.followup.send("🛍️ PayPayリンクを提出しました！運営が入金確認を行い次第、DMに商品が届きます。そのままお待ちください。", ephemeral=True)
+            await interaction.followup.send("✅ PayPayリンクを提出しました！運営が入金を確認するまでしばらくお待ちください。", ephemeral=True)
         else:
-            await interaction.followup.send("❌ システムエラー: 運営チャンネルが見つかりません。", ephemeral=True)
+            await interaction.followup.send("❌ エラー: 運営用通知チャンネルが見つかりません。", ephemeral=True)
+# --- 👑 運営用：承認ボタンの処理 ---
 class AdminApproveButton(Button):
-    def __init__(self, buyer_id, inv_id, game, name, account_data):
-        super().__init__(label="🟢 承認（DM引き渡し）", style=discord.ButtonStyle.success, custom_id=f"safe_app_{inv_id}")
-        self.buyer_id = buyer_id
-        self.inv_id = inv_id
+    def __init__(self, user_id, product_code, game, name):
+        super().__init__(label="⭕ 承認（DM引き渡し）", style=discord.ButtonStyle.success, custom_id=f"adm_app_{user_id}_{product_code}")
+        self.user_id = user_id
+        self.product_code = product_code
         self.game = game
         self.name = name
-        self.account_data = account_data
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message("あなたにはこの操作の権限がありません。", ephemeral=True)
+            await interaction.followup.send("❌ あなたはこのボタンを操作する権限がありません。", ephemeral=True)
             return
+
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (self.inv_id,))
+        cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1", (self.product_code,))
+        inventory_item = cursor.fetchone()
+        
+        if not inventory_item:
+            await interaction.followup.send("❌ エラー: 在庫切れです！補充してください。", ephemeral=True)
+            conn.close()
+            return
+            
+        inv_id, account_data = inventory_item
+        cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (inv_id,))
         conn.commit()
         conn.close()
-        buyer = interaction.client.get_user(self.buyer_id)
-        if buyer:
-            try:
-                dm_embed = discord.Embed(title="🎉 ご購入ありがとうございます！", color=discord.Color.gold())
-                dm_embed.add_field(name="商品名", value=f"[{self.game}] {self.name}", inline=False)
-                dm_embed.add_field(name="引き継ぎデータ / アカウント情報", value=f"```{self.account_data}```", inline=False)
-                await buyer.send(embed=dm_embed)
-                self.disabled = True
-                self.label = "✅ 引き渡し完了"
-                self.style = discord.ButtonStyle.secondary
-                await interaction.message.edit(view=self.view)
-                await interaction.response.send_message(f"✅ {buyer.name} へ商品をDMで引き渡しました！", ephemeral=True)
-            except discord.Forbidden:
-                conn = sqlite3.connect('vending.db')
-                cursor = conn.cursor()
-                cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (self.inv_id,))
-                conn.commit()
-                conn.close()
-                await interaction.response.send_message(f"❌ {buyer.name} のDMが閉じているため送信できませんでした。在庫は未購入に戻しました。", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ 購入者ユーザーが見つかりませんでした。", ephemeral=True)
+        
+        try:
+            buyer = await interaction.client.fetch_user(self.user_id)
+            dm_embed = discord.Embed(title="🎉 ご購入ありがとうございます！", color=discord.Color.gold())
+            dm_embed.add_field(name="商品名", value=f"[{self.game}] {self.name}", inline=False)
+            dm_embed.add_field(name="引き継ぎデータ / アカウント情報", value=f"```{account_data}```", inline=False)
+            await buyer.send(embed=dm_embed)
+            
+            edited_embed = interaction.message.embeds[0]
+            edited_embed.title = "✅ 【取引完了】承認・引き渡し済み"
+            edited_embed.color = discord.Color.green()
+            await interaction.message.edit(embed=edited_embed, view=None)
+            await interaction.followup.send(f"👤 {buyer.name} へのアカウント送信が完了しました！", ephemeral=True)
+            
+        except discord.Forbidden:
+            conn = sqlite3.connect('vending.db')
+            cursor = conn.cursor()
+            cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (inv_id,))
+            conn.commit()
+            conn.close()
+            await interaction.followup.send("❌ 購入者のDMが閉じているため送信できませんでした。在庫は未購入に戻しました。", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ 予期せぬエラーが発生しました: {e}", ephemeral=True)
 
+# --- ❌ 運営用：拒否ボタンの処理 ---
+class AdminCancelButton(Button):
+    def __init__(self, user_id, url):
+        super().__init__(label="❌ 拒否（リンク返却）", style=discord.ButtonStyle.danger, custom_id=f"adm_can_{user_id}")
+        self.user_id = user_id
+        self.url = url
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if interaction.user.id != OWNER_ID:
+            await interaction.followup.send("❌ あなたはこのボタンを操作する権限がありません。", ephemeral=True)
+            return
+            
+        conn = sqlite3.connect('vending.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM used_links WHERE link = ?", (self.url,))
+        conn.commit()
+        conn.close()
+        
+        buyer = await interaction.client.fetch_user(self.user_id)
+        try:
+            await buyer.send("⚠️ 提出されたPayPayリンクの承認が運営によって拒否されました。金額が間違っているか、すでに受け取り済みのリンクの可能性があります。確認の上再提出してください。")
+        except:
+            pass
+            
+        edited_embed = interaction.message.embeds[0]
+        edited_embed.title = "❌ 【取引拒否】リンクは却下されました"
+        edited_embed.color = discord.Color.red()
+        await interaction.message.edit(embed=edited_embed, view=None)
+        await interaction.followup.send("リンクを却下し、購入者へ通知しました。", ephemeral=True)
+
+# --- 🤖 Bot本体の定義 ---
 class JihankiBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -252,6 +313,7 @@ async def on_message(message):
 @bot.event
 async def on_ready():
     print("自販機BOTが正常に起動しました！")
+    print(f"ログインユーザー: {bot.user.name}")
     try:
         guild = discord.Object(id=SERVER_ID)
         bot.tree.copy_global_to(guild=guild)
@@ -259,6 +321,8 @@ async def on_ready():
         print("スラッシュコマンドの同期が完了しました。")
     except Exception as e:
         print(f"コマンド同期エラー: {e}")
+
+# --- 🚀 スラッシュコマンドの実装群 ---
 
 @bot.tree.command(name="add_product", description="【管理者用】新しい商品枠を作成します")
 @app_commands.describe(code="管理用コード（例: y30）", game_title="ゲーム名（例: ぷにぷに）", name="商品名（例: 石垢 30万yポ）", price="価格（円）")
@@ -276,20 +340,6 @@ async def slash_add_product(interaction: discord.Interaction, code: str, game_ti
         await interaction.response.send_message(f"❌ エラー: コード `{code}` は既に使われています。", ephemeral=True)
     finally:
         conn.close()
-
-@bot.tree.command(name="delete_product", description="【管理者用】商品をデータベースから完全に削除します")
-@app_commands.describe(code="削除したい商品の管理用コード（例: y30）")
-async def slash_delete_product(interaction: discord.Interaction, code: str):
-    if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("権限がありません。", ephemeral=True)
-        return
-    conn = sqlite3.connect('vending.db')
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM products WHERE code = ?", (code,))
-    cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
-    conn.commit()
-    conn.close()
-    await interaction.response.send_message(f"🗑️ コード `{code}` の商品と在庫をサーバーから完全に削除しました！", ephemeral=True)
 
 @bot.tree.command(name="add_stock", description="【管理者用】指定した商品の在庫を追加します")
 @app_commands.describe(code="対象商品の管理用コード（例: y30）", account_data="アカウントの引き継ぎ情報")
@@ -315,18 +365,22 @@ async def slash_add_vending(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
+        
     current_channel = interaction.channel
     await interaction.response.send_message("✅ 自販機メインパネルを設置中...", ephemeral=True)
+    
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     cursor.execute("SELECT game_title, name, price FROM products")
     products = cursor.fetchall()
     conn.close()
+    
     embed = discord.Embed(
         title="購入",
         description="下のボタンを押して購入したい商品を選択してください",
         color=discord.Color.green()
     )
+    
     if products:
         for game, name, price in products:
             embed.add_field(
@@ -340,8 +394,10 @@ async def slash_add_vending(interaction: discord.Interaction):
             value="現在登録されている商品はございません。`/add_product` で追加してください。", 
             inline=False
         )
+    embed.set_footer(text="※ご購入前にDMの受信設定をご確認ください。")
     await current_channel.send(embed=embed, view=VendingMainView())
 
+# --- ⚙️ 起動処理 ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 if __name__ == "__main__":
     if TOKEN:
