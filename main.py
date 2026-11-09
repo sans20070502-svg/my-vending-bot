@@ -70,7 +70,6 @@ async def create_prod(it: discord.Interaction, key: str, name: str, price: int):
     if it.user.id != ADMIN_ID: 
         return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
     
-    # タイムアウト対策の即時応答
     await it.response.defer(ephemeral=True)
     
     if any(x["product_key"] == key for x in PUNI_DATA):
@@ -85,7 +84,6 @@ async def add_st(it: discord.Interaction, key: str, data: str):
     if it.user.id != ADMIN_ID: 
         return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
     
-    # 【最重要：修正】タイムアウトを防ぐため即座にDiscordに応答メッセージを保留送信する
     await it.response.defer(ephemeral=True)
     
     p = next((x for x in PUNI_DATA if x["product_key"] == key), None)
@@ -126,13 +124,13 @@ class ItemSel(discord.ui.Select):
         super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
     
     async def callback(self, it: discord.Interaction):
-        val = self.values if self.values else "none"
+        val = self.values[0] if self.values else "none"
         if val == "none": return
         p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
         
-        # 配列の先頭から安全に在庫オブジェクトを1つだけ取り出す
+        # 【修正完了】完全に1つの在庫オブジェクト（辞書型）だけを確実に抽出してモーダルに引き渡す
         if p and p["stock_items"]: 
-            target_item = p["stock_items"][0]  # [0]を指定して1つに固定
+            target_item = p["stock_items"][0]
             await it.response.send_modal(PayModal(p, target_item))
 
 class VendView(discord.ui.View):
@@ -141,16 +139,19 @@ class VendView(discord.ui.View):
     
     @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.blurple, custom_id="v_buy_puni")
     async def b1(self, it: discord.Interaction, b: discord.ui.Button):
+        # 【最重要：修正】ボタンを押した瞬間のタイムアウトを完全に回避するため即時応答
+        await it.response.defer(ephemeral=True)
         v = discord.ui.View()
         v.add_item(ItemSel())
-        await it.response.send_message("ぷにぷにの商品リスト：", view=v, ephemeral=True)
+        await it.followup.send("ぷにぷにの商品リスト：", view=v, ephemeral=True)
     
     @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="v_st_puni")
     async def b2(self, it: discord.Interaction, b: discord.ui.Button):
+        await it.response.defer(ephemeral=True)
         txt = ""
         for p in PUNI_DATA: 
             txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
-        await it.response.send_message(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
+        await it.followup.send(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
 
 class PayModal(discord.ui.Modal):
     def __init__(self, p, i):
@@ -160,7 +161,6 @@ class PayModal(discord.ui.Modal):
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
-        # タイムアウト回避
         await it.response.defer(ephemeral=True)
         
         oid = str(it.id)
@@ -183,9 +183,10 @@ class AdminView(discord.ui.View):
     
     @discord.ui.button(label="✅ 承認して送信", style=discord.ButtonStyle.success)
     async def ap_b(self, it: discord.Interaction, b: discord.ui.Button):
+        await it.response.defer(ephemeral=True)
         o = orders.get(self.oid)
         if not o: 
-            return await it.response.send_message("❌ データが見つかりません（既に処理された可能性があります）", ephemeral=True)
+            return await it.followup.send("❌ データが見つかりません（既に処理された可能性があります）", ephemeral=True)
         
         p = next((x for x in PUNI_DATA if x["product_key"] == o["key"]), None)
         if p: 
@@ -196,23 +197,24 @@ class AdminView(discord.ui.View):
         if u:
             try:
                 await u.send(f"📦 ご購入ありがとうございました！\n\n🔹商品名：{o['name']}\n🔹アカウント情報：\n```\n{o['data']}\n```")
-                await it.response.send_message("✅ ユーザーへのDM送信と在庫の削除が完了しました", ephemeral=True)
+                await it.followup.send("✅ ユーザーへのDM送信と在庫の削除が完了しました", ephemeral=True)
                 for item in self.children:
                     if isinstance(item, discord.ui.Button): item.disabled = True
                 await it.message.edit(view=self)
                 del orders[self.oid]
             except: 
-                await it.response.send_message("❌ ユーザーのDMが閉じているため送信に失敗しました", ephemeral=True)
+                await it.followup.send("❌ ユーザーのDMが閉じているため送信に失敗しました", ephemeral=True)
 
     @discord.ui.button(label="❌ 拒否する", style=discord.ButtonStyle.danger)
     async def dn_b(self, it: discord.Interaction, b: discord.ui.Button):
+        await it.response.defer(ephemeral=True)
         o = orders.get(self.oid)
         if o:
             u = await bot.fetch_user(o["uid"])
             if u:
                 try: await u.send(f"❌ 【{o['name']}】の購入申請が拒否されました。送金リンク等に不備がないかご確認ください。")
                 except: pass
-            await it.response.send_message("❌ 申請を拒否しました", ephemeral=True)
+            await it.followup.send("❌ 申請を拒否しました", ephemeral=True)
 
 # --- 🚀 7. 起動イベント & Botの実行処理 ---
 @bot.event
