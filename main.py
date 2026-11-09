@@ -152,6 +152,13 @@ class JihankiBot(commands.Bot):
 
 bot = JihankiBot()
 
+# --- 🛠️ 【ここが足りなかった！】メッセージをBotが読み込むための必須処理 ---
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    await bot.process_commands(message)  # これで「!」の通常コマンドを動かします
+
 @bot.event
 async def on_ready():
     print("自販機BOTが正常に起動しました！")
@@ -163,6 +170,11 @@ async def on_ready():
         print("スラッシュコマンドの同期が完了しました。")
     except Exception as e:
         print(f"コマンド同期エラー: {e}")
+
+# --- 🛠️ 動作テスト用コマンド ---
+@bot.command()
+async def test(ctx):
+    await ctx.send("はーい！正常に聞き取れていますよ！")
 
 # --- 自販機パネルを設置するコマンド ---
 @bot.command()
