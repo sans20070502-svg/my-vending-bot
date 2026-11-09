@@ -35,7 +35,6 @@ def save_data():
         json.dump(PUNI_DATA, f, ensure_ascii=False, indent=4)
 
 PUNI_DATA = load_data()
-orders = {}
 
 # --- 🤖 4. Botクラス定義 ---
 class MyBot(commands.Bot):
@@ -50,19 +49,6 @@ class MyBot(commands.Bot):
 
 bot = MyBot()
 
-async def nt(item, pr, url, uid, oid):
-    try:
-        ch = bot.get_channel(NOTIFY_CHANNEL_ID) or await bot.fetch_channel(NOTIFY_CHANNEL_ID)
-        if ch:
-            embed = discord.Embed(title="🔔【ぷにぷに】新着購入申請", color=discord.Color.blue())
-            embed.add_field(name="購入者", value=f"<@{uid}>", inline=False)
-            embed.add_field(name="商品名", value=item, inline=False)
-            embed.add_field(name="価格", value=f"{pr}円", inline=False)
-            embed.add_field(name="PayPayリンク", value=url, inline=False)
-            await ch.send(embed=embed, view=AdminView(oid))
-    except Exception as e:
-        print(f"通知送信エラー: {e}")
-
 # --- 🛠️ 5. スラッシュコマンド（ぷにぷに専用） ---
 
 @bot.tree.command(name="商品枠追加", description="【運営専用】新しいぷにぷにの商品メニュー（枠）を作成します")
@@ -76,7 +62,7 @@ async def create_prod(it: discord.Interaction, key: str, name: str, price: int):
     save_data()
     await it.response.send_message(f"✅ぷにぷに自販機に『{name} ({price}円)』の枠を作成しました！", ephemeral=True)
 
-@bot.tree.command(name="在庫追加", description="【運営専用】指定した商品枠にぷにぷにのアカウントを追加します")
+@bot.tree.command(name="在庫追加", description="【運営専用】指定した商品枠にアカウント情報（ID/PW）を追加します")
 async def add_st(it: discord.Interaction, key: str, data: str):
     if it.user.id != ADMIN_ID: 
         return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
@@ -121,22 +107,21 @@ class ItemSel(discord.ui.Select):
         if val == "none": return
         p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
         
-        # 【最重要修正】 リストの塊ではなく「[0]番目の在庫（辞書オブジェクト単体）」を確実に渡す
+        # 配列のインデックス指定[0]を完全に修正し、安全に商品情報を引き渡す
         if p and p["stock_items"]: 
-            target_item = p["stock_items"][0]
-            await it.response.send_modal(PayModal(p, target_item))
+            await it.response.send_modal(PayModal(p, val))
 
 class VendView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.blurple, custom_id="v_buy_puni")
+    @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.blurple, custom_id="v_buy_puni_manual")
     async def b1(self, it: discord.Interaction, b: discord.ui.Button):
         v = discord.ui.View()
         v.add_item(ItemSel())
         await it.response.send_message("ぷにぷにの商品リスト：", view=v, ephemeral=True)
     
-    @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="v_st_puni")
+    @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="v_st_puni_manual")
     async def b2(self, it: discord.Interaction, b: discord.ui.Button):
         txt = ""
         for p in PUNI_DATA: 
@@ -144,67 +129,42 @@ class VendView(discord.ui.View):
         await it.response.send_message(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
 
 class PayModal(discord.ui.Modal):
-    def __init__(self, p, i):
+    def __init__(self, p, key):
         super().__init__(title="購入手続き")
-        self.p, self.i = p, i
+        self.p = p
+        self.key = key
         self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.inp)
     
     async def callback(self, it: discord.Interaction):
+        # 3秒制限のタイムアウトを即座に回避
         await it.response.defer(ephemeral=True)
         
-        oid = str(it.id)
-        orders[oid] = {
-            "uid": it.user.id, 
-            "key": self.p["product_key"], 
-            "iid": self.i["id"], 
-            "name": self.p["display_name"], 
-            "data": self.i["data"], 
-            "price": self.p["price"], 
-            "url": self.inp.value
-        }
-        await it.followup.send("✅ 申請を受け付けました！管理者の承認後、DMにてアカウント情報が届きます。", ephemeral=True)
-        await nt(self.p["display_name"], self.p["price"], self.inp.value, it.user.id, oid)
-
-class AdminView(discord.ui.View):
-    def __init__(self, oid):
-        super().__init__(timeout=None)
-        self.oid = oid
-    
-    @discord.ui.button(label="✅ 承認して送信", style=discord.ButtonStyle.success)
-    async def ap_b(self, it: discord.Interaction, b: discord.ui.Button):
-        await it.response.defer(ephemeral=True)
-        o = orders.get(self.oid)
-        if not o: 
-            return await it.followup.send("❌ データが見つかりません（既に処理された可能性があります）", ephemeral=True)
-        
-        p = next((x for x in PUNI_DATA if x["product_key"] == o["key"]), None)
-        if p: 
-            p["stock_items"] = [x for x in p["stock_items"] if x["id"] != o["iid"]]
-            save_data()
-            
-        u = await bot.fetch_user(o["uid"])
-        if u:
-            try:
-                await u.send(f"📦 ご購入ありがとうございました！\n\n🔹商品名：{o['name']}\n🔹アカウント情報：\n```\n{o['data']}\n```")
-                await it.followup.send("✅ ユーザーへのDM送信と在庫の削除が完了しました", ephemeral=True)
-                for item in self.children:
-                    if isinstance(item, discord.ui.Button): item.disabled = True
-                await it.message.edit(view=self)
-                del orders[self.oid]
-            except: 
-                await it.followup.send("❌ ユーザーのDMが閉じているため送信に失敗しました", ephemeral=True)
-
-    @discord.ui.button(label="❌ 拒否する", style=discord.ButtonStyle.danger)
-    async def dn_b(self, it: discord.Interaction, b: discord.ui.Button):
-        await it.response.defer(ephemeral=True)
-        o = orders.get(self.oid)
-        if o:
-            u = await bot.fetch_user(o["uid"])
-            if u:
-                try: await u.send(f"❌ 【{o['name']}】の購入申請が拒否されました。送金リンク等に不備がないかご確認ください。")
-                except: pass
-            await it.followup.send("❌ 申請を拒否しました", ephemeral=True)
+        try:
+            ch = bot.get_channel(NOTIFY_CHANNEL_ID) or await bot.fetch_channel(NOTIFY_CHANNEL_ID)
+            if ch:
+                # 在庫配列の先頭[0]から、登録されているID/PW（data）を1つだけ安全に抜き出す
+                target_item = self.p["stock_items"][0]
+                account_data = target_item["data"]
+                
+                # 【確定処理】ここで在庫から該当アカウントを削除して保存（二重販売防止）
+                self.p["stock_items"].pop(0)
+                save_data()
+                
+                # 運営チャンネル（1569037305644056639）へご提示通りのフォーマットで通知
+                embed = discord.Embed(title="🔔【ぷにぷに】新着購入通知", color=discord.Color.blue())
+                embed.description = f"運営チャンネルにユーザー（<@{it.user.id}>）がぷにぷにの商品「**{self.p['display_name']}**」を**{self.p['price']}円**で買いました。"
+                embed.add_field(name="🔗 PayPay送金リンク", value=self.inp.value, inline=False)
+                embed.add_field(name="📦 引き換え用アカウント情報（ID/PW）", value=f"```\n{account_data}\n```\n⚠️ 送金額が足りているか確認し、問題なければ上記のID/PWをコピペしてユーザーへ手動で渡してください。", inline=False)
+                await ch.send(embed=embed)
+                
+                # ユーザー側への受付完了メッセージ
+                await it.followup.send("✅ 申請を受け付けました！管理者が送金リンクを確認後、DMにてアカウント情報（ID/PW）をお送りしますので、そのままお待ちください。", ephemeral=True)
+            else:
+                await it.followup.send("❌ エラー：運営通知チャンネルが見つかりませんでした。", ephemeral=True)
+        except Exception as e:
+            print(f"通知送信エラー: {e}")
+            await it.followup.send("❌ 送信中にエラーが発生しました。もう一度お試しください。", ephemeral=True)
 
 # --- 🚀 7. 起動イベント & Botの実行処理 ---
 @bot.event
