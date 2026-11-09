@@ -5,8 +5,9 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View, Select
 
-OWNER_ID = 1445106767796113478
+OWNER_ID = 1445106767796113478      # あなたのユーザーID
 
+# --- 📁 データベース初期化 ---
 def init_db():
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
@@ -34,6 +35,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+# --- 🏪 自販機メイン看板のボタンUI ---
 class VendingMainView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -130,6 +132,7 @@ class VendingMainView(View):
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
         await interaction.followup.send(status_text, ephemeral=True)
+# --- 🛍️ 商品選択後の支払い案内UI ---
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(
@@ -238,10 +241,7 @@ class PayModal(discord.ui.Modal):
             
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM used_links WHERE link = ?",
-            (url,)
-        )
+        cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
         already_used = cursor.fetchone()[0]
         
         if already_used > 0:
@@ -253,7 +253,7 @@ class PayModal(discord.ui.Modal):
             return
             
         cursor.execute(
-            "SELECT id, account_data FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1",
+            "SELECT id FROM inventory WHERE product_code = ? AND used = 0 LIMIT 1",
             (self.code,)
         )
         inventory_item = cursor.fetchone()
@@ -266,43 +266,33 @@ class PayModal(discord.ui.Modal):
             conn.close()
             return
             
+        cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
+        conn.commit()
         conn.close()
         
         try:
-            conn = sqlite3.connect('vending.db')
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO used_links (link) VALUES (?)",
-                (url,)
+            # 🚨【超重要修正】指定チャンネルではなく、あなたのDM（OWNER_ID）へ直接送信！
+            owner = await interaction.client.fetch_user(OWNER_ID)
+            admin_embed = discord.Embed(
+                title="【安全決済】入金リンクが届きました",
+                description=f"購入者：{interaction.user.mention} (`{interaction.user.name}`)\n"
+                            f"商品：[{self.game}] {self.name}\n"
+                            f"設定価格：**{self.price}円**\n\n"
+                            f"👇 **下のリンクをタップしてPayPayを受け取ってください**",
+                color=discord.Color.purple()
             )
-            conn.commit()
-            conn.close()
-            
-            owner_channel = interaction.client.get_channel(1569037202149744792)
-            if owner_channel:
-                admin_embed = discord.Embed(
-                    title="【安全決済】入金リンクが届きました",
-                    description=f"購入者：{interaction.user.mention} (`{interaction.user.name}`)\n"
-                                f"商品：[{self.game}] {self.name}\n"
-                                f"設定価格：**{self.price}円**\n\n"
-                                f"👇 **下のリンクをタップしてPayPayを受け取ってください**",
-                    color=discord.Color.purple()
-                )
-                admin_embed.add_field(
-                    name="🔗 お客さんが提出したPayPayリンク",
-                    value=url,
-                    inline=False
-                )
-                admin_embed.set_footer(
-                    text="入金が確認できたら、下の「承認（DM引き渡し）」を押してください。"
-                )
-                await owner_channel.send(
-                    embed=admin_embed,
-                    view=OwnerApproveView(
-                        interaction.user.id,
-                        self.code
-                    )
-                )
+            admin_embed.add_field(
+                name="🔗 お客さんが提出したPayPayリンク",
+                value=url,
+                inline=False
+            )
+            admin_embed.set_footer(
+                text="入金が確認できたら、下の「承認（DM引き渡し）」を押してください。"
+            )
+            await owner.send(
+                embed=admin_embed,
+                view=OwnerApproveView(interaction.user.id, self.code)
+            )
             await interaction.followup.send(
                 "✅ PayPayリンクを提出しました。運営の確認をお待ちください。",
                 ephemeral=True
@@ -312,6 +302,7 @@ class PayModal(discord.ui.Modal):
                 f"❌ エラーが発生しました: {e}",
                 ephemeral=True
             )
+# --- 🔘 あなたのDMに届く「承認・拒否」ボタンの処理 ---
 class OwnerApproveView(View):
     def __init__(self, buyer_id, code):
         super().__init__(timeout=None)
@@ -344,28 +335,21 @@ class OwnerApproveView(View):
         
         if not product or not inventory_item:
             await interaction.followup.send(
-                "❌ 在庫切れ、または商品エラーです。",
+                "❌ 在庫がないか、商品が見つかりません。",
                 ephemeral=True
             )
             conn.close()
             return
             
-        g_title = product[0]
-        name = product[1]
-        inv_id = inventory_item[0]
-        account_data = inventory_item[1]
+        g_title, name = product[0], product[1]
+        inv_id, account_data = inventory_item[0], inventory_item[1]
         
-        cursor.execute(
-            "UPDATE inventory SET used = 1 WHERE id = ?",
-            (inv_id,)
-        )
+        cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (inv_id,))
         conn.commit()
         conn.close()
         
         try:
-            buyer = await interaction.client.fetch_user(
-                self.buyer_id
-            )
+            buyer = await interaction.client.fetch_user(self.buyer_id)
             dm_embed = discord.Embed(
                 title="🎉 ご購入ありがとうございます！",
                 color=discord.Color.gold()
@@ -391,14 +375,11 @@ class OwnerApproveView(View):
         except Exception as e:
             conn = sqlite3.connect('vending.db')
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE inventory SET used = 0 WHERE id = ?",
-                (inv_id,)
-            )
+            cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (inv_id,))
             conn.commit()
             conn.close()
             await interaction.followup.send(
-                f"❌ DM送信失敗。在庫を戻しました: {e}",
+                f"❌ DM送信に失敗しました。在庫は自動で復元されました: {e}",
                 ephemeral=True
             )
 
@@ -415,17 +396,13 @@ class OwnerApproveView(View):
         for item in self.children:
             item.disabled = True
         try:
-            buyer = await interaction.client.fetch_user(
-                self.buyer_id
-            )
+            buyer = await interaction.client.fetch_user(self.buyer_id)
             try:
-                await buyer.send(
-                    "❌ 運営により購入申請が拒否されました。"
-                )
+                await buyer.send("❌ 運営により購入申請が拒否されました。")
             except:
                 pass
             await interaction.response.edit_message(
-                content=f"❌ `{buyer.name}` の申請を拒否しました。",
+                content=f"❌ `{buyer.name}` からの申請を拒否しました。",
                 view=self
             )
         except:
