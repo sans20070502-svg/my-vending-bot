@@ -128,38 +128,9 @@ class ProductSelect(Select):
         view = View(timeout=180)
         view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
         await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
-# --- 商品選択後の支払い案内UI ---
-class ProductSelect(Select):
-    def __init__(self, options):
-        super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        code = self.values[0]
-        
-        conn = sqlite3.connect('vending.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
-        product = cursor.fetchone()
-        cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-        stock_count = cursor.fetchone()[0]
-        conn.close()
-        
-        if stock_count == 0:
-            await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
-            return
-            
-        pay_embed = discord.Embed(
-            title="PayPay決済手続き",
-            description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
-            color=discord.Color.blue()
-        )
-        view = View(timeout=180)
-        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2]))
-        await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
-
 class PayLinkSubmitButton(Button):
     def __init__(self, code, game, name, price):
+        # 識別用ID（custom_id）は設定せず、ボタン処理のみに修正してエラーを完全防止
         super().__init__(label="PayPayリンクを入力する", style=discord.ButtonStyle.primary)
         self.code = code
         self.game = game
@@ -213,6 +184,7 @@ class PayModal(discord.ui.Modal):
         
         try:
             owner = await interaction.client.fetch_user(OWNER_ID)
+            
             conn = sqlite3.connect('vending.db')
             cursor = conn.cursor()
             cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
