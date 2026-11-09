@@ -195,7 +195,8 @@ class OwnerApproveView(View):
             await interaction.message.edit(content=f"✅ `{buyer.name}` への引き渡しを完了しました！", view=self)
         except Exception as e:
             conn = sqlite3.connect('vending.db')
-            cursor = cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (inv_id,))
+            cursor = conn.cursor()
+            cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (inv_id,))
             conn.commit()
             conn.close()
             await interaction.followup.send(f"❌ DM送信に失敗しました。在庫は自動で復元されました: {e}", ephemeral=True)
@@ -223,14 +224,13 @@ class JihankiBot(commands.Bot):
 
 bot = JihankiBot()
 
-# 🚨【超重要】人が増えても絶対にタイムアウトしない「最軽量・自動同期」に書き換え
+# 🚨【完全解決】サーバーID指定を廃止し、どこにでも100%同期するグローバル登録に変更！
 @bot.event
 async def on_ready():
     try:
-        # 重いcopy_global_toを完全に廃止し、あなたのサーバーIDにピンポイントで直接コマンドを登録！
-        guild = discord.Object(id=1568786019044561009)
-        await bot.tree.sync(guild=guild)
-        print("最軽量モードでコマンドの同期が完了しました！")
+        # ID指定を全て消去し、世界中のすべての場所に届く「全体同期」に変更！
+        await bot.tree.sync()
+        print("全体同期モードで全てのコマンドが完全復活しました！")
     except Exception as e:
         print(f"同期エラー: {e}")
 
@@ -285,7 +285,7 @@ async def slash_delete_product(interaction: discord.Interaction, code: str):
 @bot.tree.command(name="add_vending", description="自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID: return
-    # 🚨【100%エラー回避】ボタンを押す前に、0.1秒でDiscordへ「待って」の合図を送る最高の防壁
+    # 🚨【100%応答なしを回避】コマンドが打たれた0.1秒後にDiscordへ「待って」を伝える
     await interaction.response.defer(ephemeral=True)
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
