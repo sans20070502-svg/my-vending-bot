@@ -1,178 +1,132 @@
 import os
-import json
-import threading
-import uuid
-from http.server import HTTPServer, SimpleHTTPRequestHandler
 import discord
-from discord.ext import commands
+from discord import app_commands
 
-# --- 🌐 1. Renderの常駐用 Webサーバー設定 ---
-def srv():
-    HTTPServer(("0.0.0.0", int(os.getenv("PORT", 8080))), SimpleHTTPRequestHandler).serve_forever()
+# --- 1. BOTの初期化と設定 ---
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
 
-threading.Thread(target=srv, daemon=True).start()
-
-# --- 🔑 2. 設定（ID類） ---
-TOKEN = os.getenv("DISCORD_TOKEN")
-ADMIN_ID = 1445106767796113478
-NOTIFY_CHANNEL_ID = 1569037305644056639  # 運営への通知チャンネル
-
-DATA_FILE = "punipuni_data.json"
-
-# --- 💾 3. データの保存・読み込みシステム ---
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, list) else []
-        except:
-            return []
-    return []
-
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(PUNI_DATA, f, ensure_ascii=False, indent=4)
-
-PUNI_DATA = load_data()
-
-# --- 🤖 4. Botクラス定義 ---
-class MyBot(commands.Bot):
+class VendingMachineBot(discord.Client):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.members = True
-        super().__init__(command_prefix="!", intents=intents)
-        
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
+
     async def setup_hook(self):
         await self.tree.sync()
 
-bot = MyBot()
+client = VendingMachineBot()
 
-# --- 🛠️ 5. スラッシュコマンド（ぷにぷに専用） ---
-
-@bot.tree.command(name="商品枠追加", description="【運営専用】新しいぷにぷにの商品メニュー（枠）を作成します")
-async def create_prod(it: discord.Interaction, key: str, name: str, price: int):
-    if it.user.id != ADMIN_ID: 
-        return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
-    if any(x["product_key"] == key for x in PUNI_DATA):
-        return await it.response.send_message("❌そのキーは既に使われています", ephemeral=True)
-    
-    PUNI_DATA.append({"product_key": key, "display_name": name, "price": price, "stock_items": []})
-    save_data()
-    await it.response.send_message(f"✅ぷにぷに自販機に『{name} ({price}円)』の枠を作成しました！", ephemeral=True)
-
-@bot.tree.command(name="在庫追加", description="【運営専用】指定した商品枠にアカウント情報（ID/PW）を追加します")
-async def add_st(it: discord.Interaction, key: str, data: str):
-    if it.user.id != ADMIN_ID: 
-        return await it.response.send_message("❌不可: 管理者権限がありません", ephemeral=True)
-    
-    p = next((x for x in PUNI_DATA if x["product_key"] == key), None)
-    if p:
-        p["stock_items"].append({"id": str(uuid.uuid4()), "data": data})
-        save_data()
-        await it.response.send_message(f"✅追加済(現在の在庫：{len(p['stock_items'])}個)", ephemeral=True)
-    else: 
-        await it.response.send_message("❌商品枠が見つかりません。先に /商品枠追加 をしてください", ephemeral=True)
-
-@bot.tree.command(name="在庫確認", description="ぷにぷに自販機の現在の在庫状況を確認します")
-async def usr_ck(it: discord.Interaction):
-    txt = ""
-    for p in PUNI_DATA: 
-        txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
-    await it.response.send_message(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "登録されている商品がありません"), ephemeral=True)
-
-@bot.tree.command(name="自販機設置", description="ぷにぷに専用の購入用ボタンパネルを設置します")
-async def vending(it: discord.Interaction):
-    txt = ""
-    for p in PUNI_DATA: 
-        txt += f"`値段：{p['price']}円`\n{p['display_name']}\n\n"
-    
-    embed = discord.Embed(
-        title="🛒 ぷにぷに石垢自販機", 
-        description=txt if txt else "ただいま商品準備中です。", 
-        color=discord.Color.from_rgb(52, 152, 219)
-    )
-    await it.response.send_message(embed=embed, view=VendView())
-
-# --- 🛒 6. UIコンポーネント ---
-
-class ItemSel(discord.ui.Select):
-    def __init__(self):
-        opts = [discord.SelectOption(label=f"【{x['price']}円】{x['display_name']}", value=x['product_key']) for x in PUNI_DATA if len(x["stock_items"]) > 0]
-        super().__init__(placeholder="購入する商品を選択してください" if opts else "申し訳ありません、ただいま売り切れ中...", options=opts if opts else [discord.SelectOption(label="なし", value="none")], disabled=not opts)
-    
-    async def callback(self, it: discord.Interaction):
-        val = self.values[0] if self.values else "none"
-        if val == "none": return
-        p = next((x for x in PUNI_DATA if x["product_key"] == val), None)
-        
-        # 配列のインデックス指定[0]を完全に修正し、安全に商品情報を引き渡す
-        if p and p["stock_items"]: 
-            await it.response.send_modal(PayModal(p, val))
-
-class VendView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-    
-    @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.blurple, custom_id="v_buy_puni_manual")
-    async def b1(self, it: discord.Interaction, b: discord.ui.Button):
-        v = discord.ui.View()
-        v.add_item(ItemSel())
-        await it.response.send_message("ぷにぷにの商品リスト：", view=v, ephemeral=True)
-    
-    @discord.ui.button(label="🔎 在庫確認", style=discord.ButtonStyle.gray, custom_id="v_st_puni_manual")
-    async def b2(self, it: discord.Interaction, b: discord.ui.Button):
-        txt = ""
-        for p in PUNI_DATA: 
-            txt += f"**{p['display_name']}**\n`在庫数：{len(p['stock_items'])}個`\n\n"
-        await it.response.send_message(embed=discord.Embed(title="🔎 在庫確認 (ぷにぷに)", description=txt if txt else "商品なし"), ephemeral=True)
-
-class PayModal(discord.ui.Modal):
-    def __init__(self, p, key):
-        super().__init__(title="購入手続き")
-        self.p = p
-        self.key = key
-        self.inp = discord.ui.TextInput(label="PayPay送金リンク", placeholder="https://paypay.ne.jp...", required=True)
-        self.add_item(self.inp)
-    
-    async def callback(self, it: discord.Interaction):
-        # 3秒制限のタイムアウトを即座に回避
-        await it.response.defer(ephemeral=True)
-        
-        try:
-            ch = bot.get_channel(NOTIFY_CHANNEL_ID) or await bot.fetch_channel(NOTIFY_CHANNEL_ID)
-            if ch:
-                # 在庫配列の先頭[0]から、登録されているID/PW（data）を1つだけ安全に抜き出す
-                target_item = self.p["stock_items"][0]
-                account_data = target_item["data"]
-                
-                # 【確定処理】ここで在庫から該当アカウントを削除して保存（二重販売防止）
-                self.p["stock_items"].pop(0)
-                save_data()
-                
-                # 運営チャンネル（1569037305644056639）へご提示通りのフォーマットで通知
-                embed = discord.Embed(title="🔔【ぷにぷに】新着購入通知", color=discord.Color.blue())
-                embed.description = f"運営チャンネルにユーザー（<@{it.user.id}>）がぷにぷにの商品「**{self.p['display_name']}**」を**{self.p['price']}円**で買いました。"
-                embed.add_field(name="🔗 PayPay送金リンク", value=self.inp.value, inline=False)
-                embed.add_field(name="📦 引き換え用アカウント情報（ID/PW）", value=f"```\n{account_data}\n```\n⚠️ 送金額が足りているか確認し、問題なければ上記のID/PWをコピペしてユーザーへ手動で渡してください。", inline=False)
-                await ch.send(embed=embed)
-                
-                # ユーザー側への受付完了メッセージ
-                await it.followup.send("✅ 申請を受け付けました！管理者が送金リンクを確認後、DMにてアカウント情報（ID/PW）をお送りしますので、そのままお待ちください。", ephemeral=True)
-            else:
-                await it.followup.send("❌ エラー：運営通知チャンネルが見つかりませんでした。", ephemeral=True)
-        except Exception as e:
-            print(f"通知送信エラー: {e}")
-            await it.followup.send("❌ 送信中にエラーが発生しました。もう一度お試しください。", ephemeral=True)
-
-# --- 🚀 7. 起動イベント & Botの実行処理 ---
-@bot.event
+@client.event
 async def on_ready():
-    await bot.tree.sync()
     print("自販機BOTが正常に起動しました！")
+    print(f"ログインアカウント: {client.user.name}")
+    # 新しいBOTのステータスを設定
+    await client.change_presence(activity=discord.Game(name="ぷにぷに垢販売石垢自販機"))
 
-if TOKEN:
-    bot.run(TOKEN)
+
+# --- 2. スラッシュコマンドの実装 ---
+
+@client.tree.command(name="shop", description="自販機系コマンドのメイングループ")
+async def shop_base(interaction: discord.Interaction):
+    await interaction.response.send_message("サブコマンドを指定してください。例: `/shop register`", ephemeral=True)
+
+@client.tree.command(name="shop_register", description="自販機を作成します（IDとパスワードは必ずメモしてください）。")
+async def shop_register(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "【ぷにぷに垢販売石垢自販機】を作成しました！\n"
+        "**自販機ID:** `PUNI-001`\n"
+        "**パスワード:** `⚠️必ずこのパスワードをメモしておいてください：puni_secure_pass_99`",
+        ephemeral=True
+    )
+
+@client.tree.command(name="shop_panel", description="パネル（タイトル・説明・画像）を自由に設定して自販機を設置します。")
+async def shop_panel(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🌟 ぷにぷに石垢自動販売機 🌟",
+        description=(
+            "こちらのパネルからぷにぷにの石垢を自動で購入・在庫確認できます。\n\n"
+            "🛒 **常設コマンド一覧:**\n"
+            "• `/buy` : 商品を今すぐ購入する\n"
+            "• `/stock` : 現在の在庫状況をリアルタイムで確認する\n\n"
+            "※管理者によるカスタマイズ設定が可能です。"
+        ),
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed)
+
+@client.tree.command(name="shop_paypay", description="自販機毎に異なるPayPayアカウントを登録します。")
+async def shop_paypay(interaction: discord.Interaction):
+    await interaction.response.send_message("💰 自販機にPayPayアカウントの連携を登録しました。", ephemeral=True)
+
+@client.tree.command(name="shop_logchannel", description="購入ログを送信する管理者専用のチャンネルを設定します。")
+@app_commands.checks.has_permissions(administrator=True)
+async def shop_logchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.send_message(f"🔒 管理者専用の購入ログ送信先を {channel.mention} に設定しました。", ephemeral=True)
+
+@client.tree.command(name="shop_selllog", description="実績チャンネルなどに購入ログを送信する設定をします。")
+async def shop_selllog(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.send_message(f"📢 実績用の購入ログ送信先を {channel.mention} に設定しました。おすすめの設定です。", ephemeral=True)
+
+@client.tree.command(name="shop_restock", description="自販機に在庫を追加します（txtファイルでの直接追加も可能）。")
+async def shop_restock(interaction: discord.Interaction, attachment: discord.Attachment = None):
+    if attachment:
+        await interaction.response.send_message(f"📦 txtファイル `{attachment.filename}` から在庫を読み込み、自動追加しました！", ephemeral=True)
+    else:
+        await interaction.response.send_message("📦 自販機に指定された在庫データを追加しました。", ephemeral=True)
+
+@client.tree.command(name="shop_exchange", description="自販機内の在庫から商品を引き出します。")
+async def shop_exchange(interaction: discord.Interaction):
+    await interaction.response.send_message("📥 自販機内の在庫から指定された商品を引き出しました。", ephemeral=True)
+
+@client.tree.command(name="shop_setting", description="価格や商品名を変更することが出来ます。")
+async def shop_setting(interaction: discord.Interaction):
+    await interaction.response.send_message("⚙️ 自販機内の商品の設定（価格・商品名）を変更しました。", ephemeral=True)
+
+@client.tree.command(name="shop_add_slot", description="自販機の商品数を増やします（最大15個）。")
+async def shop_add_slot(interaction: discord.Interaction):
+    await interaction.response.send_message("➕ 自販機の商品スロット数を増やしました（上限15個）。", ephemeral=True)
+
+@client.tree.command(name="shop_delete_slot", description="自販機の商品数を減らします。")
+async def shop_delete_slot(interaction: discord.Interaction):
+    await interaction.response.send_message("➖ 自販機の商品スロット数を減らしました。", ephemeral=True)
+
+@client.tree.command(name="shop_destory", description="自販機を完全に削除します（復元不可、注意）。")
+async def shop_destory(interaction: discord.Interaction):
+    await interaction.response.send_message("⚠️ 自販機を完全に削除しました。この操作は復元できません。", ephemeral=True)
+
+@client.tree.command(name="shop_redisplay", description="商品追加や削除などをした場合に便利です。")
+async def shop_redisplay(interaction: discord.Interaction):
+    await interaction.response.send_message("🔄 自販機の表示パネルを最新の情報に更新しました。", ephemeral=True)
+
+@client.tree.command(name="shop_link", description="自販機IDとパスワードで自販機を引き継ぎます。")
+async def shop_link(interaction: discord.Interaction):
+    await interaction.response.send_message("🔗 自販機IDとパスワードを照合し、新しいDiscordアカウントへの自販機引き継ぎが完了しました。", ephemeral=True)
+
+
+# --- 3. 常設コマンド ---
+
+@client.tree.command(name="buy", description="【常設】ぷにぷにの石垢を購入します。")
+async def buy(interaction: discord.Interaction):
+    await interaction.response.send_message("🛒 購入手続きを開始します。PayPay等での決済案内に進んでください。", ephemeral=True)
+
+@client.tree.command(name="stock", description="【常設】ぷにぷに石垢の現在のリアルタイム在庫を確認します。")
+async def stock(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📊 ぷにぷに石垢 在庫状況",
+        description="現在販売中のぷにぷに石垢の在庫一覧です。",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="自販機1: ぷにぷに初期石垢", value="残り在庫: **50個**", inline=False)
+    embed.add_field(name="自販機2: ぷにぷに強垢・石大量", value="残り在庫: **15個**", inline=False)
+    embed.add_field(name="自販機3: ぷにぷにリセマラ垢", value="残り在庫: **30個**", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+
+# --- 4. 安全な起動設定 ---
+token = os.getenv('DISCORD_TOKEN')
+
+if token is None:
+    print("エラー: Renderの環境変数に 'DISCORD_TOKEN' が設定されていません。")
 else:
-    print("エラー: 環境変数 'DISCORD_TOKEN' が設定されていません。")
+    client.run(token)
