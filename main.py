@@ -99,6 +99,7 @@ class VendingMainView(View):
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
         await interaction.followup.send(status_text, ephemeral=True)
+
 # --- 🛍️ 商品選択後の支払い案内UI ---
 class ProductSelect(Select):
     def __init__(self, options):
@@ -360,12 +361,31 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     conn.close()
     await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
 
+@bot.tree.command(name="delete_product", description="【管理者用】指定した商品を完全に削除します")
+@app_commands.describe(code="削除したい商品の管理用コード（例: y30）")
+async def slash_delete_product(interaction: discord.Interaction, code: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("権限がありません。", ephemeral=True)
+        return
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (code,))
+    product = cursor.fetchone()
+    if not product:
+        await interaction.response.send_message(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
+        conn.close()
+        return
+    cursor.execute("DELETE FROM products WHERE code = ?", (code,))
+    cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f"🗑️ 商品「[{product[0]}] {product[1]}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
+
 @bot.tree.command(name="add_vending", description="【管理者用】このコマンドを打ったチャンネルに自販機パネルを設置します")
 async def slash_add_vending(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
-        
     current_channel = interaction.channel
     await interaction.response.send_message("✅ 自販機メインパネルを設置中...", ephemeral=True)
     
@@ -380,7 +400,6 @@ async def slash_add_vending(interaction: discord.Interaction):
         description="下のボタンを押して購入したい商品を選択してください",
         color=discord.Color.green()
     )
-    
     if products:
         for game, name, price in products:
             embed.add_field(
