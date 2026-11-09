@@ -34,7 +34,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- 🔘 自販機パネルのUI（ボタン・選択メニュー） ---
+# --- 🔘 自販機パネルのUI ---
 class VendingMainView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -162,51 +162,55 @@ async def on_message(message):
 async def on_ready():
     print("自販機BOTが正常に起動しました！")
     print(f"ログインユーザー: {bot.user.name}")
+    try:
+        guild = discord.Object(id=SERVER_ID)
+        bot.tree.copy_global_to(guild=guild)
+        await bot.tree.sync(guild=guild)
+        print("スラッシュコマンドの同期が完了しました。")
+    except Exception as e:
+        print(f"コマンド同期エラー: {e}")
 
-# --- 🛠️ 動作テスト用コマンド ---
-@bot.command()
-async def test(ctx):
-    await ctx.send("はーい！正常に聞き取れていますよ！")
-
-# --- 🛍️ 【新機能】通常コマンドで商品を追加する（!add_product） ---
-# 使い方: !add_product 管理コード ゲーム名 商品名 価格
-@bot.command()
-async def add_product(ctx, code: str, game_title: str, name: str, price: int):
-    if ctx.author.id != OWNER_ID:
+# --- 🚀 【お気に入り】スラッシュコマンド版の登録機能群 ---
+@bot.tree.command(name="add_product", description="【管理者用】新しい商品枠を作成します")
+@app_commands.describe(code="管理用コード（例: y30）", game_title="ゲーム名（例: ぷにぷに）", name="商品名（例: 石垢 30万yポ）", price="価格（円）")
+async def slash_add_product(interaction: discord.Interaction, code: str, game_title: str, name: str, price: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
-        
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO products (code, game_title, name, price) VALUES (?, ?, ?, ?)", (code, game_title, name, price))
         conn.commit()
-        await ctx.send(f"✅ 商品を登録しました！\nコード: `{code}` | [{game_title}] {name} ({price}円)")
+        await interaction.response.send_message(f"✅ 商品を登録しました！\nコード: `{code}` | [{game_title}] {name} ({price}円)", ephemeral=True)
     except sqlite3.IntegrityError:
-        await ctx.send(f"❌ エラー: コード `{code}` は既に使われています。")
+        await interaction.response.send_message(f"❌ エラー: コード `{code}` は既に使われています。", ephemeral=True)
     finally:
         conn.close()
 
-# --- 📦 【新機能】通常コマンドで在庫を追加する（!add_stock） ---
-# 使い方: !add_stock 管理コード アカウント情報
-@bot.command()
-async def add_stock(ctx, code: str, *, account_data: str):
-    if ctx.author.id != OWNER_ID:
+@bot.tree.command(name="add_stock", description="【管理者用】指定した商品の在庫を追加します")
+@app_commands.describe(code="対象商品の管理用コード（例: y30）", account_data="アカウントの引き継ぎ情報")
+async def slash_add_stock(interaction: discord.Interaction, code: str, account_data: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
-        
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (code,))
     product = cursor.fetchone()
-    
     if not product:
-        await ctx.send(f"❌ エラー: コード `{code}` の商品が見つかりません。先に `!add_product` で枠を作ってください。")
+        await interaction.response.send_message(f"❌ エラー: コード `{code}` の商品が見つかりません。", ephemeral=True)
         conn.close()
         return
-        
     cursor.execute("INSERT INTO inventory (product_code, account_data) VALUES (?, ?)", (code, account_data))
     conn.commit()
     conn.close()
-    await ctx.send(f"✅ 「[{product[0]}] {product[1]}」に在庫を1件追加しました！")
+    await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
+
+# --- ⚙️ 通常コマンドテスト ---
+@bot.command()
+async def test(ctx):
+    await ctx.send("はーい！正常に聞き取れていますよ！")
 
 # --- 自販機パネルを設置するコマンド ---
 @bot.command()
