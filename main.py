@@ -34,7 +34,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- 🔘 自販機パネルのUI ---
+# --- 🔘 自販機パネルのUI（ボタン・選択メニュー） ---
 class VendingMainView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -170,7 +170,8 @@ async def on_ready():
     except Exception as e:
         print(f"コマンド同期エラー: {e}")
 
-# --- 🚀 【お気に入り】スラッシュコマンド版の登録機能群 ---
+# --- 🚀 スラッシュコマンド一覧 ---
+
 @bot.tree.command(name="add_product", description="【管理者用】新しい商品枠を作成します")
 @app_commands.describe(code="管理用コード（例: y30）", game_title="ゲーム名（例: ぷにぷに）", name="商品名（例: 石垢 30万yポ）", price="価格（円）")
 async def slash_add_product(interaction: discord.Interaction, code: str, game_title: str, name: str, price: int):
@@ -207,16 +208,13 @@ async def slash_add_stock(interaction: discord.Interaction, code: str, account_d
     conn.close()
     await interaction.response.send_message(f"✅ 「[{product[0]}] {product[1]}」に在庫を追加しました！", ephemeral=True)
 
-# --- ⚙️ 通常コマンドテスト ---
-@bot.command()
-async def test(ctx):
-    await ctx.send("はーい！正常に聞き取れていますよ！")
-
-# --- 自販機パネルを設置するコマンド ---
-@bot.command()
-async def setup_vending(ctx):
-    if ctx.author.id != OWNER_ID:
+# --- 🏪 【新機能】スラッシュコマンドで自販機を設置する ---
+@bot.tree.command(name="add_vending", description="【管理者用】指定されたチャンネルに自販機パネルを設置します")
+async def slash_add_vending(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("権限がありません。", ephemeral=True)
         return
+        
     embed = discord.Embed(
         title="🏪 アカウント自動販売機",
         description="下の「購入する」ボタンを押すと、現在販売中の商品メニューが表示されます。\n購入後、アカウントデータは自動的にDMで送信されます。",
@@ -227,9 +225,9 @@ async def setup_vending(ctx):
     target_channel = bot.get_channel(J_CHANNEL_ID)
     if target_channel:
         await target_channel.send(embed=embed, view=VendingMainView())
-        await ctx.send("自販機メインパネルを設置しました！")
+        await interaction.response.send_message("✅ 指定されたチャンネルに自販機メインパネルを設置しました！", ephemeral=True)
     else:
-        await ctx.send("エラー: 指定されたチャンネルIDが見つかりません。")
+        await interaction.response.send_message("❌ エラー: 指定されたチャンネルIDが見つかりませんでした。", ephemeral=True)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if __name__ == "__main__":
