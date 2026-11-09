@@ -5,9 +5,8 @@ from discord import app_commands
 from discord.ext import commands
 from discord.ui import Button, View, Select
 
-OWNER_ID = 1445106767796113478      # あなたのユーザーID
+OWNER_ID = 1445106767796113478
 
-# --- 📁 データベース初期化 ---
 def init_db():
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
@@ -35,7 +34,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- 🏪 自販機メイン看板のボタンUI ---
 class VendingMainView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -72,7 +70,7 @@ class VendingMainView(View):
                 "SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0",
                 (code,)
             )
-            stock_count = c.fetchone()[0]
+            stock_count = c.fetchone()
             conn.close()
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -121,18 +119,17 @@ class VendingMainView(View):
                 "SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0",
                 (code,)
             )
-            un_count = cursor.fetchone()[0]
+            un_count = cursor.fetchone()
             cursor.execute(
                 "SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1",
                 (code,)
             )
-            so_count = cursor.fetchone()[0]
+            so_count = cursor.fetchone()
             status_text += f"● [{game}] {name} (コード: {code})\n"
             status_text += f"   └ 在庫: {un_count}個 | 累計販売数: {so_count}個\n"
         status_text += "━━━━━━━━━━━━━━━━━━"
         conn.close()
         await interaction.followup.send(status_text, ephemeral=True)
-# --- 🛍️ 商品選択後の支払い案内UI ---
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(
@@ -144,7 +141,7 @@ class ProductSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        code = self.values[0]
+        code = self.values
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
@@ -157,7 +154,7 @@ class ProductSelect(Select):
             "SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0",
             (code,)
         )
-        stock_count = cursor.fetchone()[0]
+        stock_count = cursor.fetchone()
         conn.close()
         
         if stock_count == 0:
@@ -169,10 +166,10 @@ class ProductSelect(Select):
             
         pay_embed = discord.Embed(
             title="PayPay決済手続き",
-            description=f"商品：**[{product[0]}] {product[1]}**\n"
-                        f"価格：**{product[2]}円**\n\n"
+            description=f"商品：**[{product}] {product}**\n"
+                        f"価格：**{product}円**\n\n"
                         f"【購入手順】\n"
-                        f"1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n"
+                        f"1. あなたのPayPayアプリで「**{product}円の送金リンク**」を作成してください。\n"
                         f"2. 下のボタンを押し、作成したリンクURLを入力して提出してください。\n"
                         f"3. 運営がリンクの受取（入金確認）を完了した瞬間に、あなたのDMへ商品が自動送信されます！",
             color=discord.Color.blue()
@@ -181,9 +178,9 @@ class ProductSelect(Select):
         view.add_item(
             PayLinkSubmitButton(
                 code,
-                product[0],
-                product[1],
-                product[2]
+                product,
+                product,
+                product
             )
         )
         await interaction.followup.send(
@@ -242,7 +239,7 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        already_used = cursor.fetchone()[0]
+        already_used = cursor.fetchone()
         
         if already_used > 0:
             await interaction.followup.send(
@@ -271,7 +268,6 @@ class PayModal(discord.ui.Modal):
         conn.close()
         
         try:
-            # 🚨【超重要修正】指定チャンネルではなく、あなたのDM（OWNER_ID）へ直接送信！
             owner = await interaction.client.fetch_user(OWNER_ID)
             admin_embed = discord.Embed(
                 title="【安全決済】入金リンクが届きました",
@@ -302,7 +298,6 @@ class PayModal(discord.ui.Modal):
                 f"❌ エラーが発生しました: {e}",
                 ephemeral=True
             )
-# --- 🔘 あなたのDMに届く「承認・拒否」ボタンの処理 ---
 class OwnerApproveView(View):
     def __init__(self, buyer_id, code):
         super().__init__(timeout=None)
@@ -341,8 +336,8 @@ class OwnerApproveView(View):
             conn.close()
             return
             
-        g_title, name = product[0], product[1]
-        inv_id, account_data = inventory_item[0], inventory_item[1]
+        g_title, name = product, product
+        inv_id, account_data = inventory_item, inventory_item
         
         cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (inv_id,))
         conn.commit()
@@ -393,6 +388,7 @@ class OwnerApproveView(View):
         interaction: discord.Interaction,
         button: Button
     ):
+        await interaction.response.defer(ephemeral=True)
         for item in self.children:
             item.disabled = True
         try:
@@ -424,24 +420,31 @@ class JihankiBot(commands.Bot):
 
 bot = JihankiBot()
 
+# 🚨【超重要修正】アプリ応答なしを100%防ぐためのダイレクト登録方式に変更！
 @bot.event
 async def on_ready():
     try:
+        # あなたのサーバー専用に直接裏側からコマンドを強制流し込み！
         guild = discord.Object(id=1568786019044561009)
-        bot.tree.copy_global_to(guild=guild)
+        bot.tree.clear_commands(guild=guild)
+        bot.tree.add_command(slash_add_product, guild=guild)
+        bot.tree.add_command(slash_add_stock, guild=guild)
+        bot.tree.add_command(slash_delete_product, guild=guild)
+        bot.tree.add_command(slash_add_vending, guild=guild)
         await bot.tree.sync(guild=guild)
-    except:
-        pass
+        print("スラッシュコマンドを1対1で強制同期しました！")
+    except Exception as e:
+        print(f"同期エラー: {e}")
 
-@bot.tree.command(name="add_product")
+@commands.hybrid_command(name="add_product")
 async def slash_add_product(
-    interaction: discord.Interaction,
+    ctx: commands.Context,
     code: str,
     game_title: str,
     name: str,
     price: int
 ):
-    if interaction.user.id != OWNER_ID: return
+    if ctx.author.id != OWNER_ID: return
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     try:
@@ -450,36 +453,24 @@ async def slash_add_product(
             (code, game_title, name, price)
         )
         conn.commit()
-        await interaction.response.send_message(
-            "✅ 商品を登録しました！",
-            ephemeral=True
-        )
+        await ctx.send("✅ 商品を登録しました！", ephemeral=True)
     except:
-        await interaction.response.send_message(
-            "❌ エラーが発生しました。",
-            ephemeral=True
-        )
+        await ctx.send("❌ エラーが発生しました。", ephemeral=True)
     finally:
         conn.close()
 
-@bot.tree.command(name="add_stock")
+@commands.hybrid_command(name="add_stock")
 async def slash_add_stock(
-    interaction: discord.Interaction,
+    ctx: commands.Context,
     code: str,
     account_data: str
 ):
-    if interaction.user.id != OWNER_ID: return
+    if ctx.author.id != OWNER_ID: return
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT name FROM products WHERE code = ?",
-        (code,)
-    )
+    cursor.execute("SELECT name FROM products WHERE code = ?", (code,))
     if not cursor.fetchone():
-        await interaction.response.send_message(
-            "❌ 商品コードが見つかりません。",
-            ephemeral=True
-        )
+        await ctx.send("❌ 商品コードが見つかりません。", ephemeral=True)
         conn.close()
         return
     cursor.execute(
@@ -488,48 +479,35 @@ async def slash_add_stock(
     )
     conn.commit()
     conn.close()
-    await interaction.response.send_message(
-        "✅ 在庫を追加しました！",
-        ephemeral=True
-    )
+    await ctx.send("✅ 在庫を追加しました！", ephemeral=True)
 
-@bot.tree.command(name="delete_product")
+@commands.hybrid_command(name="delete_product")
 async def slash_delete_product(
-    interaction: discord.Interaction,
+    ctx: commands.Context,
     code: str
 ):
-    if interaction.user.id != OWNER_ID: return
+    if ctx.author.id != OWNER_ID: return
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT name FROM products WHERE code = ?",
-        (code,)
-    )
+    cursor.execute("SELECT name FROM products WHERE code = ?", (code,))
     product_row = cursor.fetchone()
     if not product_row:
-        await interaction.response.send_message(
-            "❌ 商品が見つかりません。",
-            ephemeral=True
-        )
+        await ctx.send("❌ 商品が見つかりません。", ephemeral=True)
         conn.close()
         return
-    product = product_row[0]
+    product = product_row
     cursor.execute("DELETE FROM products WHERE code = ?", (code,))
     cursor.execute("DELETE FROM inventory WHERE product_code = ?", (code,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(
-        f"🗑️ 商品「{product}」（コード: `{code}`）と在庫を削除しました！",
-        ephemeral=True
-    )
+    await ctx.send(f"🗑️ 商品「{product}」（コード: `{code}`）と在庫を削除しました！", ephemeral=True)
 
-@bot.tree.command(name="add_vending")
-async def slash_add_vending(interaction: discord.Interaction):
-    if interaction.user.id != OWNER_ID: return
-    await interaction.response.send_message(
-        "✅ パネル設置中...",
-        ephemeral=True
-    )
+@commands.hybrid_command(name="add_vending")
+async def slash_add_vending(ctx: commands.Context):
+    if ctx.author.id != OWNER_ID: return
+    # 🚨【最強のタイムアウト対策】最初の一瞬でDiscordへ「待って」の信号を送る
+    await ctx.defer(ephemeral=True)
+    
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     cursor.execute("SELECT game_title, name, price FROM products")
@@ -549,20 +527,13 @@ async def slash_add_vending(interaction: discord.Interaction):
                 inline=False
             )
     else:
-        embed.add_field(
-            name="在庫なし",
-            value="現在登録されている商品はございません。`/add_product` で追加してください。",
-            inline=False
-        )
+        embed.add_field(name="在庫なし", value="商品はございません。", inline=False)
     embed.set_footer(text="※ご購入前にDMの受信設定をご確認ください。")
-    await interaction.channel.send(
-        embed=embed,
-        view=VendingMainView()
-    )
-    await interaction.followup.send(
-        "✅ 自販機メインパネルを設置しました！",
-        ephemeral=True
-    )
+    
+    # チャンネルへ確実に送信
+    await ctx.channel.send(embed=embed, view=VendingMainView())
+    # タイムアウトを100%回避する最後のメッセージ
+    await ctx.send("✅ 自販機メインパネルを設置しました！", ephemeral=True)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 if __name__ == "__main__":
