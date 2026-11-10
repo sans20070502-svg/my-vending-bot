@@ -7,7 +7,7 @@ from discord.ui import Button, View, Select
 
 OWNER_ID = 1445106767796113478
 # 💡ここにあなたのDiscordサーバーの「実績チャンネル」のIDを設定してください
-JISSEKI_CHANNEL_ID = 1569037305644056639  
+JISSEKI_CHANNEL_ID = 1569714481007689758  
 
 def init_db():
     conn = sqlite3.connect('vending.db')
