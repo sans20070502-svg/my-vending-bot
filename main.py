@@ -6,8 +6,7 @@ from discord.ext import commands, tasks
 from discord.ui import Button, View, Select
 
 OWNER_ID = 1445106767796113478
-# 💡実績チャンネルのIDを設定済みです
-JISSEKI_CHANNEL_ID = 1569714481007689758  
+JISSEKI_CHANNEL_ID = 1569714481007689758
 
 def init_db():
     conn = sqlite3.connect('vending.db')
@@ -57,28 +56,26 @@ class VendingMainView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT code, game_title, name, price FROM products WHERE game_title = ?", (self.game_filter,))
         products = cursor.fetchall()
-        conn.close()
         
         if not products:
+            conn.close()
             await interaction.followup.send(f"現在、{self.game_filter}の販売中の商品はございません。", ephemeral=True)
             return
             
         options = []
         for code, game, name, price in products:
-            conn = sqlite3.connect('vending.db')
-            c = conn.cursor()
-            c.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (code,))
-            row = c.fetchone()
+            cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (code,))
+            row = cursor.fetchone()
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-            actual_stock = c.fetchone()
+            actual_stock = cursor.fetchone()
             
-            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
+            act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
             stock_count = row_val if row_val > 0 else act_val
-            conn.close()
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
             options.append(discord.SelectOption(label=f"[{game}] {name}", description=f"価格: {price}円 ({stock_status})", value=code))
+        conn.close()
             
         view = View(timeout=60)
         view.add_item(ProductSelect(options))
@@ -108,13 +105,13 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
             
-            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
+            act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
             un_count = row_val if row_val > 0 else act_val
                 
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
             so_count = cursor.fetchone()
-            so_val = so_count if so_count and isinstance(so_count, tuple) else (so_count if so_count else 0)
+            so_val = so_count[0] if so_count and isinstance(so_count, tuple) else (so_count if so_count else 0)
             
             stock_text = f"{un_count}個" if un_count > 0 else "在庫なし"
             field_value = f"**在庫数:** {stock_text}\n**販売数:** {so_val}個"
@@ -122,7 +119,6 @@ class VendingMainView(View):
         embed.set_footer(text="読み終えましたか? #雑談 などをチェックしてみてください。")
         conn.close()
         await interaction.followup.send(embed=embed, ephemeral=True)
-
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
@@ -140,8 +136,8 @@ class ProductSelect(Select):
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
         actual_stock = cursor.fetchone()
         
-        row_val = row if row and isinstance(row, tuple) else (row if row else 0)
-        act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+        row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
+        act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
         stock_count = row_val if row_val > 0 else act_val
         conn.close()
         
@@ -151,15 +147,10 @@ class ProductSelect(Select):
 
         view = QuantitySelectView(code, product[0], product[1], product[2], stock_count)
         await interaction.followup.send(f"商品 **[{product[0]}] {product[1]}** の購入個数を選択してください：", view=view, ephemeral=True)
+
 class QuantitySelectView(View):
     def __init__(self, code, game, name, single_price, max_stock):
         super().__init__(timeout=60)
-        self.code = code
-        self.game = game
-        self.name = name
-        self.single_price = single_price
-        
-        # 在庫数または上限5個のうち、小さい方を最大選択可能数にする
         select_max = min(5, max_stock)
         options = [discord.SelectOption(label=f"{i}個", value=str(i)) for i in range(1, select_max + 1)]
         self.add_item(QuantitySelect(options, code, game, name, single_price))
@@ -179,8 +170,6 @@ class QuantitySelect(Select):
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        
-        # 💡選択した個数分のアカウントデータをキープ（予約）する
         cursor.execute("SELECT id FROM inventory WHERE product_code = ? AND used = 0 ORDER BY id ASC LIMIT ?", (self.code, quantity))
         rows = cursor.fetchall()
         
@@ -227,7 +216,6 @@ class PayModal(discord.ui.Modal):
         self.quantity = quantity
         self.link_input = discord.ui.TextInput(label=f"作成したPayPay送金リンク ({price}円分)", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.link_input)
-
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         url = self.link_input.value.strip()
@@ -247,6 +235,7 @@ class PayModal(discord.ui.Modal):
         cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
         conn.commit()
         conn.close()
+        
         try:
             owner = await interaction.client.fetch_user(OWNER_ID)
             guild_name = interaction.guild.name if interaction.guild else "個人のDM / 不明"
@@ -282,27 +271,22 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (self.code,))
         product = cursor.fetchone()
-        g_title = product if product else "商品"
-        name = product if product else "詳細"
+        g_title = product[0] if product else "商品"
+        name = product[1] if product else "詳細"
         
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (self.code,))
         row = cursor.fetchone()
-        row_val = row if row and isinstance(row, tuple) else (row if row else 0)
+        row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
         
         account_data_list = []
         if self.inv_ids_str:
             raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
-            inv_ids = []
-            for r_id in raw_ids:
-                clean_id = "".join(c for c in r_id if c.isdigit())
-                if clean_id:
-                    inv_ids.append(int(clean_id))
-                    
+            inv_ids = [int("".join(c for c in r if c.isdigit())) for r in raw_ids if any(c.isdigit() for c in r)]
             for i_id in inv_ids:
                 cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (i_id,))
                 inv_row = cursor.fetchone()
                 if inv_row:
-                    account_data_list.append(inv_row if isinstance(inv_row, tuple) else inv_row)
+                    account_data_list.append(inv_row[0] if isinstance(inv_row, tuple) else inv_row)
                 cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (i_id,))
         
         if row_val > 0:
@@ -312,10 +296,7 @@ class OwnerApproveView(View):
         conn.commit()
         conn.close()
         
-        if account_data_list:
-            final_account_data = "\n\n".join(account_data_list)
-        else:
-            final_account_data = "(手動在庫設定のため、個別のアカウントデータは登録されていません。直接お渡しください。)"
+        final_account_data = "\n\n".join(account_data_list) if account_data_list else "(手動在庫設定のため、個別のアカウントデータは登録されていません。直接お渡しください。)"
             
         try:
             buyer = await interaction.client.fetch_user(self.buyer_id)
@@ -328,7 +309,6 @@ class OwnerApproveView(View):
             await interaction.message.edit(view=self)
             await interaction.followup.send("✅ 商品をDMで自動送信し、取引を完了しました!", ephemeral=True)
             
-            # 💡実績チャンネルへOpenVD Pro(1)風のEmbedを全自動送信
             try:
                 jisseki_channel = interaction.client.get_channel(JISSEKI_CHANNEL_ID)
                 if jisseki_channel:
@@ -342,16 +322,13 @@ class OwnerApproveView(View):
                     jisseki_embed.set_footer(text="読み終えましたか？ #追加・補充して欲しい石垢 をチェックしてみてください。")
                     
                     arrow_view = View(timeout=None)
-                    arrow_button = Button(style=discord.ButtonStyle.primary, label="➔", custom_id="btn_jisseki_arrow")
-                    arrow_view.add_item(arrow_button)
-                    
+                    arrow_view.add_item(Button(style=discord.ButtonStyle.primary, label="➔", custom_id="btn_jisseki_arrow"))
                     await jisseki_channel.send(embed=jisseki_embed, view=arrow_view)
             except Exception as j_err:
                 print(f"実績投稿エラー: {j_err}")
                 
         except Exception as e:
             await interaction.followup.send(f"❌ 購入者へのDM送信に失敗しました: {e}", ephemeral=True)
-
     @discord.ui.button(label="🔴 拒否(リンク無効/キャンセル)", style=discord.ButtonStyle.danger, custom_id="btn_owner_deny")
     async def deny_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True)
@@ -360,12 +337,7 @@ class OwnerApproveView(View):
         
         if self.inv_ids_str:
             raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
-            inv_ids = []
-            for r_id in raw_ids:
-                clean_id = "".join(c for c in r_id if c.isdigit())
-                if clean_id:
-                    inv_ids.append(int(clean_id))
-                    
+            inv_ids = [int("".join(c for c in r if c.isdigit())) for r in raw_ids if any(c.isdigit() for c in r)]
             for i_id in inv_ids:
                 cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (i_id,))
             conn.commit()
@@ -381,24 +353,22 @@ class OwnerApproveView(View):
         except:
             pass
         await interaction.followup.send("❌ 取引を拒否(キャンセル)し、キープされていた在庫を完全に1番手へ復旧しました!", ephemeral=True)
+
 class JihankiBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned_or('!'), intents=discord.Intents.all())
 
     async def setup_hook(self):
         init_db()
-        # 💡重要:再起動時にも3大タイトルの自販機ボタンが動き続けるよう登録
         self.add_view(VendingMainView(game_filter="ぷにぷに"))
         self.add_view(VendingMainView(game_filter="バウンティ"))
         self.add_view(VendingMainView(game_filter="モンスト"))
 
 bot = JihankiBot()
 
-# 💡[完全復活]: 管理者用チャンネルIDで安全に心臓マッサージを行います
 @tasks.loop(minutes=1.0)
 async def keep_alive_pulse():
     try:
-        # 管理者用チャンネルIDに繋ぎ直しました
         channel = bot.get_channel(1569037305644056639)
         if channel:
             msg = await channel.send("⏳ 自販機Bot稼働維持システム:心臓マッサージ中...")
@@ -412,8 +382,6 @@ async def on_ready():
     try:
         await bot.tree.sync()
         print("Successfully synced global slash commands.")
-        
-        # 管理者用チャンネルでの維持システムを起動
         if not keep_alive_pulse.is_running():
             keep_alive_pulse.start()
             print("Keep alive pulse started successfully.")
