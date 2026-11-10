@@ -69,8 +69,8 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
             
-            row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
+            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
             stock_count = row_val if row_val > 0 else act_val
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -105,18 +105,17 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
             
-            row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
+            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
             un_count = row_val if row_val > 0 else act_val
                 
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
             so_count = cursor.fetchone()
-            so_val = so_count[0] if so_count and isinstance(so_count, tuple) else (so_count if so_count else 0)
+            so_val = so_count if so_count and isinstance(so_count, tuple) else (so_count if so_count else 0)
             
             stock_text = f"{un_count}個" if un_count > 0 else "在庫なし"
             field_value = f"**在庫数:** {stock_text}\n**販売数:** {so_val}個"
             embed.add_field(name=f"📦 {code} {name}", value=field_value, inline=False)
-        embed.set_footer(text="読み終えましたか? #雑談 などをチェックしてみてください。")
         conn.close()
         await interaction.followup.send(embed=embed, ephemeral=True)
 class ProductSelect(Select):
@@ -227,7 +226,7 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        if cursor.fetchone()[0] > 0:
+        if cursor.fetchone() > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
             conn.close()
             return
@@ -271,12 +270,12 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (self.code,))
         product = cursor.fetchone()
-        g_title = product[0] if product else "商品"
-        name = product[1] if product else "詳細"
+        g_title = product if product else "商品"
+        name = product if product else "詳細"
         
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (self.code,))
         row = cursor.fetchone()
-        row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
+        row_val = row if row and isinstance(row, tuple) else (row if row else 0)
         
         account_data_list = []
         if self.inv_ids_str:
@@ -286,7 +285,7 @@ class OwnerApproveView(View):
                 cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (i_id,))
                 inv_row = cursor.fetchone()
                 if inv_row:
-                    account_data_list.append(inv_row[0] if isinstance(inv_row, tuple) else inv_row)
+                    account_data_list.append(inv_row if isinstance(inv_row, tuple) else inv_row)
                 cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (i_id,))
         
         if row_val > 0:
@@ -312,18 +311,15 @@ class OwnerApproveView(View):
             try:
                 jisseki_channel = interaction.client.get_channel(JISSEKI_CHANNEL_ID)
                 if jisseki_channel:
-                    jisseki_embed = discord.Embed(color=discord.Color.from_rgb(186, 255, 0))
-                    jisseki_embed.add_field(name="商品名", value=f"{self.quantity} 【{g_title}】 {name}", inline=False)
-                    jisseki_embed.add_field(name="購入数", value=f"{self.quantity}個", inline=False)
-                    jisseki_embed.add_field(name="購入サーバー", value=f"{self.guild_name} ({self.guild_id})", inline=False)
-                    jisseki_embed.add_field(name="購入者", value=f"{buyer.mention} ({buyer.id})", inline=False)
-                    jisseki_embed.set_author(name="OpenVD Pro(1)", icon_url=interaction.client.user.avatar.url if interaction.client.user.avatar else None)
-                    jisseki_embed.description = "Created by @twur_1"
-                    jisseki_embed.set_footer(text="読み終えましたか？ #追加・補充して欲しい石垢 をチェックしてみてください。")
+                    jisseki_embed = discord.Embed(color=discord.Color.from_rgb(0, 255, 102))
+                    jisseki_embed.set_author(name="Game.VM", icon_url=interaction.client.user.avatar.url if interaction.client.user.avatar else None)
+                    jisseki_embed.add_field(name="商品名", value=f"```\n{self.quantity} 【{g_title}】 {name}\n```", inline=False)
+                    jisseki_embed.add_field(name="購入数", value=f"```\n{self.quantity}個\n```", inline=False)
+                    jisseki_embed.add_field(name="購入サーバー", value=f"```\n{self.guild_name}({self.guild_id})\n```", inline=False)
+                    jisseki_embed.add_field(name="購入者", value=f"{buyer.mention}({buyer.id})", inline=False)
+                    jisseki_embed.set_footer(text="ご購入ありがとうございました")
                     
-                    arrow_view = View(timeout=None)
-                    arrow_view.add_item(Button(style=discord.ButtonStyle.primary, label="➔", custom_id="btn_jisseki_arrow"))
-                    await jisseki_channel.send(embed=jisseki_embed, view=arrow_view)
+                    await jisseki_channel.send(embed=jisseki_embed)
             except Exception as j_err:
                 print(f"実績投稿エラー: {j_err}")
                 
