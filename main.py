@@ -425,6 +425,7 @@ async def slash_add_vending(interaction: discord.Interaction):
     embed.set_footer(text="購入ボタンを押すとDMにメニューが表示されます。")
     await interaction.channel.send(embed=embed, view=VendingMainView())
     await interaction.followup.send("✅ 自販機パネルを設置しました。", ephemeral=True)
+
 TOKEN = os.getenv('DISCORD_TOKEN')
 if name == 'main':
 if TOKEN:
