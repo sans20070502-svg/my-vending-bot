@@ -57,10 +57,10 @@ class VendingMainView(View):
             c.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = c.fetchone()
             
-            if row and row[0] > 0:
-                stock_count = row[0]
+            if row and row > 0:
+                stock_count = row
             else:
-                stock_count = actual_stock[0]
+                stock_count = actual_stock
                 
             conn.close()
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -93,13 +93,13 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
 
-            if row and row[0] > 0:
-                un_count = row[0]
+            if row and row > 0:
+                un_count = row
             else:
-                un_count = actual_stock[0]
+                un_count = actual_stock
 
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
-            so_count = cursor.fetchone()[0]
+            so_count = cursor.fetchone()
 
             stock_text = f"{un_count}個" if un_count > 0 else "在庫なし"
 
@@ -118,38 +118,33 @@ class ProductSelect(Select):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        code = self.values[0]
+        code = self.values
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
         
-        # 手動在庫数をチェック
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (code,))
         row = cursor.fetchone()
         
-        # 💡【重要】購入ボタンを押した時点で、一番古い在庫データを1件だけ「キープ状態(used=2)」にする
         cursor.execute("SELECT id FROM inventory WHERE product_code = ? AND used = 0 ORDER BY id ASC LIMIT 1", (code,))
         target_inv = cursor.fetchone()
         
         if target_inv:
-            inv_id = target_inv[0]
-            # usedを 2 (キープ中) に書き換えて、2人目の購入者には次のアカウントが回るようにロック
+            inv_id = target_inv
             cursor.execute("UPDATE inventory SET used = 2 WHERE id = ?", (inv_id,))
             conn.commit()
         else:
             inv_id = None
 
-        # 在庫数の最終カウント確認
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
-        actual_stock = cursor.fetchone()[0]
+        actual_stock = cursor.fetchone()
         
-        if row and row[0] > 0:
-            stock_count = row[0]
+        if row and row > 0:
+            stock_count = row
         else:
             stock_count = actual_stock
             
-        # もしキープ処理をしようとした時に、すでに手動在庫も自動在庫も完全に0なら弾く
         if stock_count == 0 and not inv_id:
             await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
             conn.close()
@@ -157,10 +152,9 @@ class ProductSelect(Select):
             
         conn.close()
         
-        # 決済の案内を表示（キープした在庫のIDを次の承認Viewに引き継ぎます）
-        pay_embed = discord.Embed(title="PayPay決済手続き", description=f"商品：**[{product[0]}] {product[1]}**\n価格：**{product[2]}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product[2]}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、URLを入力して提出してください。\n3. 運営が入金確認を完了した瞬間に、あなたのDMへ商品が自動送信されます！", color=discord.Color.blue())
+        pay_embed = discord.Embed(title="PayPay決済手続き", description=f"商品：**[{product}] {product}**\n価格：**{product}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{product}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、URLを入力して提出してください。\n3. 運営が入金確認を完了した瞬間に、あなたのDMへ商品が自動送信されます！", color=discord.Color.blue())
         view = View(timeout=180)
-        view.add_item(PayLinkSubmitButton(code, product[0], product[1], product[2], inv_id))
+        view.add_item(PayLinkSubmitButton(code, product, product, product, inv_id))
         await interaction.followup.send(embed=pay_embed, view=view, ephemeral=True)
 
 class PayLinkSubmitButton(Button):
@@ -193,7 +187,7 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        if cursor.fetchone()[0] > 0:
+        if cursor.fetchone() > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
             conn.close()
             return
@@ -225,21 +219,17 @@ class OwnerApproveView(View):
         cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (self.code,))
         product = cursor.fetchone()
         
-        # 手動在庫数を取得して減らす準備
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (self.code,))
         row = cursor.fetchone()
         
-        # キープされていたデータを正式に取得
         account_data = "（手動在庫設定のため、個別のアカウントデータは登録されていません。直接お渡しください。）"
         if self.inv_id:
             cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (self.inv_id,))
             inv_row = cursor.fetchone()
             if inv_row:
                 account_data = inv_row[0]
-            # usedを 1 (正式に売却済み) に変更
             cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (self.inv_id,))
 
-        # 手動在庫数が設定されていれば、こちらも「-1」して上書き
         if row:
             new_stock = max(0, row[0] - 1)
             cursor.execute("INSERT OR REPLACE INTO manual_stock (product_code, stock_count) VALUES (?, ?)", (self.code, new_stock))
@@ -263,14 +253,10 @@ class OwnerApproveView(View):
         await interaction.response.defer(ephemeral=True)
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        
-        # 💡【超重要】あなたが拒否（キャンセル）した瞬間に、キープされていたデータを「未使用(used=0)」に完全に巻き戻す！
         if self.inv_id:
             cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (self.inv_id,))
             conn.commit()
-            
         conn.close()
-        
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
@@ -290,12 +276,26 @@ class JihankiBot(commands.Bot):
 
 bot = JihankiBot()
 
+from discord.ext import tasks
+@tasks.loop(minutes=1.0)
+async def keep_alive_pulse():
+    try:
+        channel = bot.get_channel(1569037305644056639)
+        if channel:
+            msg = await channel.send("⏳ 自販機Bot稼働維持システム：心臓マッサージ中...")
+            await msg.delete()
+    except Exception as e:
+        print(f"Keep alive error: {e}")
+
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
     try:
         await bot.tree.sync()
         print("Successfully synced global slash commands.")
+        if not keep_alive_pulse.is_running():
+            keep_alive_pulse.start()
+            print("Keep alive pulse started successfully.")
     except Exception as e:
         print(f"Sync error: {e}")
 
@@ -330,7 +330,6 @@ async def slash_set_stock(interaction: discord.Interaction, product_code: str, s
         await interaction.followup.send("❌ 存在しない商品コードです。", ephemeral=True)
         conn.close()
         return
-    
     cursor.execute("INSERT OR REPLACE INTO manual_stock (product_code, stock_count) VALUES (?, ?)", (product_code, stock_count))
     conn.commit()
     conn.close()
@@ -354,7 +353,6 @@ async def slash_stock_add(interaction: discord.Interaction, product_code: str, a
     conn.close()
     await interaction.followup.send("✅ アカウントデータを追加しました。", ephemeral=True)
 
-# 💡【完全新規追加】あなたが現在セットしている「未売却のアカウントデータの中身」をいつでもあなただけに一覧で書き出す管理コマンド！
 @bot.tree.command(name="view_un_stock", description="【管理者専用】まだ売れていないアカウントデータの中身を一覧で確認します")
 async def slash_view_un_stock(interaction: discord.Interaction, product_code: str):
     if interaction.user.id != OWNER_ID:
@@ -363,24 +361,17 @@ async def slash_view_un_stock(interaction: discord.Interaction, product_code: st
     await interaction.response.defer(ephemeral=True)
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
-    
-    # まだ売れていないデータ（used=0 または キープ中の2）を古い順に引っ張ってくる
     cursor.execute("SELECT id, account_data, used FROM inventory WHERE product_code = ? AND used != 1 ORDER BY id ASC", (product_code,))
     rows = cursor.fetchall()
     conn.close()
-    
     if not rows:
         await interaction.followup.send(f"📦 商品コード `{product_code}` に、現在セットされている未使用の在庫データはありません。", ephemeral=True)
         return
-        
-    result_text = f"📋 **商品コード `{product_code}` の未使用・キープ中データ一覧**\n"
-    result_text += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    result_text = f"📋 **商品コード `{product_code}` の未使用・キープ中データ一覧**\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
     for idx, (inv_id, data, used) in enumerate(rows, 1):
         status = "【キープ中(手続き中)】" if used == 2 else "【在庫あり】"
         result_text += f"{idx}番目：{status}\n```\n{data}\n```\n"
     result_text += "━━━━━━━━━━━━━━━━━━━━━━━━"
-    
-    # ephemeral=Trueのおかげで、絶対にあなた以外のメンバーの画面には表示されません
     await interaction.followup.send(result_text, ephemeral=True)
 
 @bot.tree.command(name="delete_product", description="商品を削除します")
@@ -427,6 +418,6 @@ async def slash_add_vending(interaction: discord.Interaction):
     await interaction.followup.send("✅ 自販機パネルを設置しました。", ephemeral=True)
 
 TOKEN = os.getenv('DISCORD_TOKEN')
-if name == 'main':
-if TOKEN:
-bot.run(TOKEN)
+if __name__ == '__main__':
+    if TOKEN:
+        bot.run(TOKEN)
