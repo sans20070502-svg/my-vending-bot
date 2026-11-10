@@ -69,8 +69,8 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
             
-            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            (row_val,) = row if row else (0,)
+            (act_val,) = actual_stock if actual_stock else (0,)
             stock_count = row_val if row_val > 0 else act_val
             
             stock_status = f"残り{stock_count}個" if stock_count > 0 else "在庫なし"
@@ -105,13 +105,13 @@ class VendingMainView(View):
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
             actual_stock = cursor.fetchone()
             
-            row_val = row if row and isinstance(row, tuple) else (row if row else 0)
-            act_val = actual_stock if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+            (row_val,) = row if row else (0,)
+            (act_val,) = actual_stock if actual_stock else (0,)
             un_count = row_val if row_val > 0 else act_val
                 
             cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 1", (code,))
             so_count = cursor.fetchone()
-            so_val = so_count if so_count and isinstance(so_count, tuple) else (so_count if so_count else 0)
+            (so_val,) = so_count if so_count else (0,)
             
             stock_text = f"{un_count}個" if un_count > 0 else "在庫なし"
             field_value = f"**在庫数:** {stock_text}\n**販売数:** {so_val}個"
@@ -124,7 +124,7 @@ class ProductSelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        code = self.values[0]
+        (code,) = self.values
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
@@ -135,8 +135,8 @@ class ProductSelect(Select):
         cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 0", (code,))
         actual_stock = cursor.fetchone()
         
-        row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
-        act_val = actual_stock[0] if actual_stock and isinstance(actual_stock, tuple) else (actual_stock if actual_stock else 0)
+        (row_val,) = row if row else (0,)
+        (act_val,) = actual_stock if actual_stock else (0,)
         stock_count = row_val if row_val > 0 else act_val
         conn.close()
         
@@ -144,8 +144,9 @@ class ProductSelect(Select):
             await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。", ephemeral=True)
             return
 
-        view = QuantitySelectView(code, product[0], product[1], product[2], stock_count)
-        await interaction.followup.send(f"商品 **[{product[0]}] {product[1]}** の購入個数を選択してください：", view=view, ephemeral=True)
+        g_title, p_name, p_price = product
+        view = QuantitySelectView(code, g_title, p_name, p_price, stock_count)
+        await interaction.followup.send(f"商品 **[{g_title}] {p_name}** の購入個数を選択してください：", view=view, ephemeral=True)
 
 class QuantitySelectView(View):
     def __init__(self, code, game, name, single_price, max_stock):
@@ -164,7 +165,8 @@ class QuantitySelect(Select):
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        quantity = int(self.values[0])
+        (val_str,) = self.values
+        quantity = int(val_str)
         total_price = self.single_price * quantity
         
         conn = sqlite3.connect('vending.db')
@@ -174,9 +176,9 @@ class QuantitySelect(Select):
         
         inv_ids = []
         if rows:
-            inv_ids = [r[0] for r in rows]
-            for inv_id in inv_ids:
-                cursor.execute("UPDATE inventory SET used = 2 WHERE id = ?", (inv_id,))
+            for (r_id,) in rows:
+                inv_ids.append(r_id)
+                cursor.execute("UPDATE inventory SET used = 2 WHERE id = ?", (r_id,))
             conn.commit()
         conn.close()
         
@@ -226,7 +228,8 @@ class PayModal(discord.ui.Modal):
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM used_links WHERE link = ?", (url,))
-        if cursor.fetchone() > 0:
+        (link_count,) = cursor.fetchone()
+        if link_count > 0:
             await interaction.followup.send("❌ エラー: このPayPayリンクはすでに使用されています。", ephemeral=True)
             conn.close()
             return
@@ -270,23 +273,23 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (self.code,))
         product = cursor.fetchone()
-        g_title = product if product else "商品"
-        name = product if product else "詳細"
+        g_title, name = product if product else ("商品", "詳細")
         
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (self.code,))
         row = cursor.fetchone()
-        row_val = row if row and isinstance(row, tuple) else (row if row else 0)
+        (row_val,) = row if row else (0,)
         
         account_data_list = []
         if self.inv_ids_str:
-            raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
-            inv_ids = [int("".join(c for c in r if c.isdigit())) for r in raw_ids if any(c.isdigit() for c in r)]
-            for i_id in inv_ids:
-                cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (i_id,))
-                inv_row = cursor.fetchone()
-                if inv_row:
-                    account_data_list.append(inv_row if isinstance(inv_row, tuple) else inv_row)
-                cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (i_id,))
+            for r_id in self.inv_ids_str.split(","):
+                if r_id.strip().isdigit():
+                    i_id = int(r_id.strip())
+                    cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (i_id,))
+                    inv_row = cursor.fetchone()
+                    if inv_row:
+                        (data_str,) = inv_row
+                        account_data_list.append(data_str)
+                    cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (i_id,))
         
         if row_val > 0:
             new_stock = max(0, row_val - self.quantity)
@@ -332,10 +335,10 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         
         if self.inv_ids_str:
-            raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
-            inv_ids = [int("".join(c for c in r if c.isdigit())) for r in raw_ids if any(c.isdigit() for c in r)]
-            for i_id in inv_ids:
-                cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (i_id,))
+            for r_id in self.inv_ids_str.split(","):
+                if r_id.strip().isdigit():
+                    i_id = int(r_id.strip())
+                    cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (i_id,))
             conn.commit()
         conn.close()
         
@@ -472,13 +475,13 @@ async def slash_product_delete(interaction: discord.Interaction, product_code: s
         await interaction.followup.send("❌ 存在しない商品コードです。", ephemeral=True)
         conn.close()
         return
-    product = product_row if isinstance(product_row, tuple) else product_row
+    (product_name,) = product_row
     cursor.execute("DELETE FROM products WHERE code = ?", (product_code,))
     cursor.execute("DELETE FROM inventory WHERE product_code = ?", (product_code,))
     cursor.execute("DELETE FROM manual_stock WHERE product_code = ?", (product_code,))
     conn.commit()
     conn.close()
-    await interaction.followup.send(f"🗑️ 商品「{product}」とそのデータをすべて削除しました。", ephemeral=True)
+    await interaction.followup.send(f"🗑️ 商品「{product_name}」とそのデータをすべて削除しました。", ephemeral=True)
 
 @bot.tree.command(name="add_vending", description="【管理者専用】指定したゲームの自販機パネルをこのチャンネルに設置します")
 @app_commands.choices(game_title=[
