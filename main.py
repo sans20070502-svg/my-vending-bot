@@ -248,7 +248,7 @@ class PayModal(discord.ui.Modal):
         cursor.execute("INSERT INTO used_links (link) VALUES (?)", (url,))
         conn.commit()
         conn.close()
-        try:
+                try:
             owner = await interaction.client.fetch_user(OWNER_ID)
             guild_name = interaction.guild.name if interaction.guild else "個人のDM / 不明"
             guild_id = interaction.guild.id if interaction.guild else 0
@@ -283,21 +283,30 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         cursor.execute("SELECT game_title, name FROM products WHERE code = ?", (self.code,))
         product = cursor.fetchone()
-        g_title = product if product else "商品"
-        name = product if product else "詳細"
+        g_title = product[0] if product else "商品"
+        name = product[1] if product else "詳細"
         
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (self.code,))
         row = cursor.fetchone()
-        row_val = row if row and isinstance(row, tuple) else (row if row else 0)
+        row_val = row[0] if row and isinstance(row, tuple) else (row if row else 0)
         
         account_data_list = []
         if self.inv_ids_str:
-            inv_ids = [int(i) for i in self.inv_ids_str.split(",") if i]
+            # 💡 [バグ修正]: データベースから取り出したIDの形式(タプルや文字列)を確実に綺麗な数字に変換する対策
+            raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
+            inv_ids = []
+            for r_id in raw_ids:
+                clean_id = "".join(c for c in r_id if c.isdigit())
+                if clean_id:
+                    inv_ids.append(int(clean_id))
+                    
             for i_id in inv_ids:
                 cursor.execute("SELECT account_data FROM inventory WHERE id = ?", (i_id,))
                 inv_row = cursor.fetchone()
                 if inv_row:
-                    account_data_list.append(inv_row if isinstance(inv_row, tuple) else inv_row)
+                    # 💡 [バグ修正]: アカウントデータがタプルで取得された場合に文字列だけを正確に抜き出す対策
+                    data_str = inv_row[0] if isinstance(inv_row, tuple) else inv_row
+                    account_data_list.append(data_str)
                 cursor.execute("UPDATE inventory SET used = 1 WHERE id = ?", (i_id,))
         
         if row_val > 0:
@@ -323,7 +332,6 @@ class OwnerApproveView(View):
             await interaction.message.edit(view=self)
             await interaction.followup.send("✅ 商品をDMで自動送信し、取引を完了しました!", ephemeral=True)
             
-            # 💡【指定の実績チャンネルへOpenVD Pro風のEmbedを自動送信】
             try:
                 jisseki_channel = interaction.client.get_channel(JISSEKI_CHANNEL_ID)
                 if jisseki_channel:
@@ -336,7 +344,6 @@ class OwnerApproveView(View):
                     jisseki_embed.description = "Created by @twur_1"
                     jisseki_embed.set_footer(text="読み終えましたか？ #追加・補充して欲しい石垢 をチェックしてみてください。")
                     
-                    # ➔ボタンの再現
                     arrow_view = View(timeout=None)
                     arrow_button = Button(style=discord.ButtonStyle.primary, label="➔", custom_id="btn_jisseki_arrow")
                     arrow_view.add_item(arrow_button)
@@ -355,7 +362,13 @@ class OwnerApproveView(View):
         cursor = conn.cursor()
         
         if self.inv_ids_str:
-            inv_ids = [int(i) for i in self.inv_ids_str.split(",") if i]
+            raw_ids = self.inv_ids_str.replace("(", "").replace(")", "").replace(",", " ").split()
+            inv_ids = []
+            for r_id in raw_ids:
+                clean_id = "".join(c for c in r_id if c.isdigit())
+                if clean_id:
+                    inv_ids.append(int(clean_id))
+                    
             for i_id in inv_ids:
                 cursor.execute("UPDATE inventory SET used = 0 WHERE id = ?", (i_id,))
             conn.commit()
@@ -371,6 +384,7 @@ class OwnerApproveView(View):
         except:
             pass
         await interaction.followup.send("❌ 取引を拒否(キャンセル)し、キープされていた在庫を完全に1番手へ復旧しました!", ephemeral=True)
+
 class JihankiBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned_or('!'), intents=discord.Intents.all())
