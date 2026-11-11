@@ -8,6 +8,15 @@ from discord.ui import Button, View, Select
 OWNER_ID = 1445106767796113478
 JISSEKI_CHANNEL_ID = 1569714481007689758
 
+# ランク昇格設定（累計金額が高い順から判定）
+RANK_TIERS = (
+    (50000, 1569594036875174009, "【大御所】プラチナ"),
+    (30000, 1569593919421939873, "【特級】VIP"),
+    (10000, 1569593821333954581, "【シルバー】顧客"),
+    (5000,  1569593478948724736, "【常連】リピーター"),
+    (1500,  1569592586526793768, "【一般】バイヤー"),
+)
+
 def init_db():
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
@@ -34,6 +43,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS manual_stock (
             product_code TEXT PRIMARY KEY,
             stock_count INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_spending (
+            user_id INTEGER PRIMARY KEY,
+            total_spent INTEGER DEFAULT 0
         )
     ''')
     conn.commit()
@@ -251,18 +266,19 @@ class PayModal(discord.ui.Modal):
             admin_embed.add_field(name="🔗 お客さんが提出したPayPayリンク", value=url, inline=False)
             admin_embed.set_footer(text="入金が確認できたら、下の「承認(DM引き渡し)」を押してください。もしキャンセルなら「拒否」を押すと在庫が1番手に戻ります。")
             
-            await owner.send(embed=admin_embed, view=OwnerApproveView(interaction.user.id, self.code, self.inv_ids_str, self.quantity, guild_name, guild_id))
+            await owner.send(embed=admin_embed, view=OwnerApproveView(interaction.user.id, self.code, self.inv_ids_str, self.quantity, self.price, guild_name, guild_id))
             await interaction.followup.send("✅ PayPayリンクを提出しました。運営の確認をお待ちください。", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ エラーが発生しました: {e}", ephemeral=True)
 
 class OwnerApproveView(View):
-    def __init__(self, buyer_id, code, inv_ids_str, quantity, guild_name, guild_id):
+    def __init__(self, buyer_id, code, inv_ids_str, quantity, total_price, guild_name, guild_id):
         super().__init__(timeout=None)
         self.buyer_id = buyer_id
         self.code = code
         self.inv_ids_str = inv_ids_str
         self.quantity = quantity
+        self.total_price = total_price
         self.guild_name = guild_name
         self.guild_id = guild_id
 
@@ -295,21 +311,56 @@ class OwnerApproveView(View):
             new_stock = max(0, row_val - self.quantity)
             cursor.execute("INSERT OR REPLACE INTO manual_stock (product_code, stock_count) VALUES (?, ?)", (self.code, new_stock))
             
+        # 💡 過去の累計購入金額を取得し、今回の購入金額を合算して保存
+        cursor.execute("SELECT total_spent FROM user_spending WHERE user_id = ?", (self.buyer_id,))
+        spend_row = cursor.fetchone()
+        (prev_spent,) = spend_row if spend_row else (0,)
+        new_total_spent = prev_spent + self.total_price
+        cursor.execute("INSERT OR REPLACE INTO user_spending (user_id, total_spent) VALUES (?, ?)", (self.buyer_id, new_total_spent))
+        
         conn.commit()
         conn.close()
+        
+        # 💡 累計金額に応じた自動ランクアップ＆古い下位ランクの解除
+        rank_notice = ""
+        try:
+            if self.guild_id:
+                guild = interaction.client.get_guild(self.guild_id)
+                if guild:
+                    member = guild.get_member(self.buyer_id) or await guild.fetch_member(self.buyer_id)
+                    target_role_id = None
+                    target_role_name = ""
+                    for min_amount, r_id, r_name in RANK_TIERS:
+                        if new_total_spent >= min_amount:
+                            target_role_id = r_id
+                            target_role_name = r_name
+                            break
+                    if target_role_id and member:
+                        all_rank_ids = {r_id for _, r_id, _ in RANK_TIERS}
+                        roles_to_remove = [r for r in member.roles if r.id in all_rank_ids and r.id != target_role_id]
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove)
+                        target_role = guild.get_role(target_role_id)
+                        if target_role and target_role not in member.roles:
+                            await member.add_roles(target_role)
+                            rank_notice = f"\n🎉 累計購入金額が **{new_total_spent:,}円** に達したため、ランクが **{target_role_name}** に昇格しました！"
+                        elif target_role:
+                            rank_notice = f"\n🏅 現在の累計購入金額: **{new_total_spent:,}円**（ランク: **{target_role_name}**）"
+        except Exception as r_err:
+            print(f"ロール自動付与エラー: {r_err}")
         
         final_account_data = "\n\n".join(account_data_list) if account_data_list else "(手動在庫設定のため、個別のアカウントデータは登録されていません。直接お渡しください。)"
             
         try:
             buyer = await interaction.client.fetch_user(self.buyer_id)
-            dm_embed = discord.Embed(title="🛒 ご購入ありがとうございます!", description=f"引き渡し商品:**[{g_title}] {name}**\n購入数:**{self.quantity}個**\n以下のアカウント情報をお受け取りください。", color=discord.Color.green())
+            dm_embed = discord.Embed(title="🛒 ご購入ありがとうございます!", description=f"引き渡し商品:**[{g_title}] {name}**\n購入数:**{self.quantity}個**\n以下のアカウント情報をお受け取りください。{rank_notice}", color=discord.Color.green())
             dm_embed.add_field(name="🔑 アカウントデータ", value=f"```\n{final_account_data}\n```", inline=False)
             await buyer.send(embed=dm_embed)
             
             for item in self.children:
                 item.disabled = True
             await interaction.message.edit(view=self)
-            await interaction.followup.send("✅ 商品をDMで自動送信し、取引を完了しました!", ephemeral=True)
+            await interaction.followup.send(f"✅ 商品をDMで自動送信し、取引を完了しました!（累計: {new_total_spent:,}円）", ephemeral=True)
             
             try:
                 jisseki_channel = interaction.client.get_channel(JISSEKI_CHANNEL_ID)
