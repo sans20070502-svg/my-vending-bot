@@ -7,8 +7,8 @@ from discord.ui import Button, View, Select
 
 OWNER_ID = 1445106767796113478
 JISSEKI_CHANNEL_ID = 1569714481007689758
+TICKET_STAFF_ROLE_ID = 1569872554514980954
 
-# ランク昇格設定（累計金額が高い順から判定）
 RANK_TIERS = (
     (50000, 1569594036875174009, "【大御所】プラチナ"),
     (30000, 1569593919421939873, "【特級】VIP"),
@@ -311,7 +311,6 @@ class OwnerApproveView(View):
             new_stock = max(0, row_val - self.quantity)
             cursor.execute("INSERT OR REPLACE INTO manual_stock (product_code, stock_count) VALUES (?, ?)", (self.code, new_stock))
             
-        # 💡 過去の累計購入金額を取得し、今回の購入金額を合算して保存
         cursor.execute("SELECT total_spent FROM user_spending WHERE user_id = ?", (self.buyer_id,))
         spend_row = cursor.fetchone()
         (prev_spent,) = spend_row if spend_row else (0,)
@@ -321,7 +320,6 @@ class OwnerApproveView(View):
         conn.commit()
         conn.close()
         
-        # 💡 累計金額に応じた自動ランクアップ＆古い下位ランクの解除
         rank_notice = ""
         try:
             if self.guild_id:
@@ -404,6 +402,70 @@ class OwnerApproveView(View):
             pass
         await interaction.followup.send("❌ 取引を拒否(キャンセル)し、キープされていた在庫を完全に1番手へ復旧しました!", ephemeral=True)
 
+class TicketPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎫 発行", style=discord.ButtonStyle.success, custom_id="btn_ticket_create")
+    async def create_ticket(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("❌ サーバー内でのみ使用できます。", ephemeral=True)
+            return
+
+        channel_topic_tag = f"ticket-owner:{interaction.user.id}"
+        for ch in guild.text_channels:
+            if ch.topic == channel_topic_tag:
+                await interaction.followup.send(f"❌ すでに開いているチケットがあります: {ch.mention}", ephemeral=True)
+                return
+
+        staff_role = guild.get_role(TICKET_STAFF_ROLE_ID)
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
+
+        category = interaction.channel.category if isinstance(interaction.channel, discord.TextChannel) else None
+        safe_name = "".join(c for c in interaction.user.name.lower() if c.isalnum()) or "user"
+        
+        try:
+            ticket_channel = await guild.create_text_channel(
+                name=f"ticket-{safe_name}",
+                overwrites=overwrites,
+                category=category,
+                topic=channel_topic_tag
+            )
+            
+            welcome_embed = discord.Embed(
+                title="🎫 お問い合わせ窓口",
+                description=f"{interaction.user.mention} 様、チケットを発行しました。\n\n**問い合わせの内容を書いてお待ちください。**\n購入時のトラブルやアカウントの不具合などを詳しくご記入ください。",
+                color=discord.Color.green()
+            )
+            mention_text = f"{interaction.user.mention}"
+            if staff_role:
+                mention_text += f" {staff_role.mention}"
+                
+            await ticket_channel.send(content=mention_text, embed=welcome_embed, view=TicketCloseView())
+            await interaction.followup.send(f"✅ 専用チャンネルを作成しました: {ticket_channel.mention}", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ チケットの作成に失敗しました: {e}", ephemeral=True)
+
+class TicketCloseView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 チケットを閉じる", style=discord.ButtonStyle.danger, custom_id="btn_ticket_close")
+    async def close_ticket(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.send_message("🔒 3秒後にこのチケットチャンネルを削除します...")
+        await discord.utils.sleep_until(discord.utils.utcnow() + discord.timedelta(seconds=3))
+        try:
+            await interaction.channel.delete()
+        except Exception as e:
+            print(f"チケット削除エラー: {e}")
 class JihankiBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned_or('!'), intents=discord.Intents.all())
@@ -413,6 +475,8 @@ class JihankiBot(commands.Bot):
         self.add_view(VendingMainView(game_filter="ぷにぷに"))
         self.add_view(VendingMainView(game_filter="バウンティ"))
         self.add_view(VendingMainView(game_filter="モンスト"))
+        self.add_view(TicketPanelView())
+        self.add_view(TicketCloseView())
 
 bot = JihankiBot()
 
@@ -565,6 +629,23 @@ async def slash_add_vending(interaction: discord.Interaction, game_title: str):
     
     await interaction.channel.send(embed=embed, view=VendingMainView(game_filter=game_title))
     await interaction.followup.send(f"✅ 【{game_title}】専用の自販機パネルを設置しました!", ephemeral=True)
+
+@bot.tree.command(name="add_ticket", description="【管理者専用】お問い合わせ・サポートチケット発行パネルを設置します")
+async def slash_add_ticket(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    
+    embed = discord.Embed(
+        title="🎫 お問い合わせ・サポート",
+        description="購入時のトラブルや、購入後の不具合・ご質問がある場合は下の「🎫 発行」ボタンを押してください。\nスタッフと1対1でやり取りできる専用チャンネルが作成されます。",
+        color=discord.Color.green()
+    )
+    embed.set_footer(text="無言でのチケット発行はお控えください。")
+    
+    await interaction.channel.send(embed=embed, view=TicketPanelView())
+    await interaction.followup.send("✅ サポートチケット発行パネルを設置しました！", ephemeral=True)
 
 TOKEN = os.getenv('DISCORD_TOKEN')
 if __name__ == '__main__':
