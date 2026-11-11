@@ -11,10 +11,10 @@ JISSEKI_CHANNEL_ID = 1569714481007689758
 TICKET_STAFF_ROLE_ID = 1569872554514980954
 
 RANK_TIERS = (
-    (50000, 1569594036875174009, "【大御所】プラチナ"),
-    (30000, 1569593919421939873, "【特級】VIP"),
-    (10000, 1569593821333954581, "【シルバー】顧客"),
-    (5000,  1569593478948724736, "【常連】リピーター"),
+    (50000, 1569594036875174009, "【ダイヤ】大御所"),
+    (30000, 1569593919421939873, "【プラチナ】VIP"),
+    (10000, 1569593821333954581, "【ゴールド】リピーター"),
+    (5000,  1569593478948724736, "【シルバー】顧客"),
     (1500,  1569592586526793768, "【一般】バイヤー"),
 )
 
@@ -96,7 +96,6 @@ class VendingMainView(View):
         view = View(timeout=60)
         view.add_item(ProductSelect(options))
         await interaction.followup.send(f"【{self.game_filter}自販機】購入したい商品を選択してください:", view=view, ephemeral=True)
-
     @discord.ui.button(label="在庫・販売数の確認", style=discord.ButtonStyle.primary)
     async def stock_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True)
@@ -134,6 +133,7 @@ class VendingMainView(View):
             embed.add_field(name=f"📦 {code} {name}", value=field_value, inline=False)
         conn.close()
         await interaction.followup.send(embed=embed, ephemeral=True)
+
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
@@ -197,7 +197,6 @@ class QuantitySelect(Select):
                 cursor.execute("UPDATE inventory SET used = 2 WHERE id = ?", (r_id,))
             conn.commit()
         conn.close()
-        
         inv_ids_str = ",".join(map(str, inv_ids)) if inv_ids else ""
 
         pay_embed = discord.Embed(
@@ -233,6 +232,7 @@ class PayModal(discord.ui.Modal):
         self.quantity = quantity
         self.link_input = discord.ui.TextInput(label=f"作成したPayPay送金リンク ({price}円分)", placeholder="https://paypay.ne.jp...", required=True)
         self.add_item(self.link_input)
+
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         url = self.link_input.value.strip()
@@ -327,23 +327,26 @@ class OwnerApproveView(View):
                 guild = interaction.client.get_guild(self.guild_id)
                 if guild:
                     member = guild.get_member(self.buyer_id) or await guild.fetch_member(self.buyer_id)
-                    target_role_id = None
+                    target_role = None
                     target_role_name = ""
                     for min_amount, r_id, r_name in RANK_TIERS:
                         if new_total_spent >= min_amount:
-                            target_role_id = r_id
+                            target_role = guild.get_role(r_id) or discord.utils.get(guild.roles, name=r_name)
                             target_role_name = r_name
                             break
-                    if target_role_id and member:
+                    if target_role and member:
                         all_rank_ids = {r_id for _, r_id, _ in RANK_TIERS}
-                        roles_to_remove = [r for r in member.roles if r.id in all_rank_ids and r.id != target_role_id]
+                        all_rank_names = {r_name for _, _, r_name in RANK_TIERS}
+                        roles_to_remove = [
+                            r for r in member.roles
+                            if (r.id in all_rank_ids or r.name in all_rank_names) and r.id != target_role.id
+                        ]
                         if roles_to_remove:
                             await member.remove_roles(*roles_to_remove)
-                        target_role = guild.get_role(target_role_id)
-                        if target_role and target_role not in member.roles:
+                        if target_role not in member.roles:
                             await member.add_roles(target_role)
                             rank_notice = f"\n🎉 累計購入金額が **{new_total_spent:,}円** に達したため、ランクが **{target_role_name}** に昇格しました！"
-                        elif target_role:
+                        else:
                             rank_notice = f"\n🏅 現在の累計購入金額: **{new_total_spent:,}円**（ランク: **{target_role_name}**）"
         except Exception as r_err:
             print(f"ロール自動付与エラー: {r_err}")
@@ -467,6 +470,7 @@ class TicketCloseView(View):
             await interaction.channel.delete()
         except Exception as e:
             print(f"チケット削除エラー: {e}")
+
 class JihankiBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned_or('!'), intents=discord.Intents.all())
