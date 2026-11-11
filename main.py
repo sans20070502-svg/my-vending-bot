@@ -1,4 +1,5 @@
 import os
+import asyncio
 import sqlite3
 import discord
 from discord import app_commands
@@ -461,7 +462,7 @@ class TicketCloseView(View):
     @discord.ui.button(label="🔒 チケットを閉じる", style=discord.ButtonStyle.danger, custom_id="btn_ticket_close")
     async def close_ticket(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_message("🔒 3秒後にこのチケットチャンネルを削除します...")
-        await discord.utils.sleep_until(discord.utils.utcnow() + discord.timedelta(seconds=3))
+        await asyncio.sleep(3)
         try:
             await interaction.channel.delete()
         except Exception as e:
