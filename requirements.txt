@@ -1,5 +1,6 @@
 discord.py==2.4.0
 asyncio
 audioop-lts
+aiohttp
 
 
