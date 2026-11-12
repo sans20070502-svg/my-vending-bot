@@ -19,6 +19,14 @@ RANK_TIERS = (
     (1500,  1569592586526793768, "【一般】バイヤー"),
 )
 
+GENERATION_TIERS = (
+    (3,    "最古参☠️", "【最古参☠️】"),
+    (15,   "古参🎮",   "【古参🎮】"),
+    (315,  "第一世代", "【第一世代】"),
+    (815,  "第二世代", "【第二世代】"),
+    (1815, "第三世代", "【第三世代】"),
+)
+
 def init_db():
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
@@ -51,6 +59,14 @@ def init_db():
         CREATE TABLE IF NOT EXISTS user_spending (
             user_id INTEGER PRIMARY KEY,
             total_spent INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS member_generations (
+            join_order INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER UNIQUE,
+            role_name TEXT,
+            suffix TEXT
         )
     ''')
     conn.commit()
@@ -482,6 +498,77 @@ class JihankiBot(commands.Bot):
         self.add_view(TicketCloseView())
 
 bot = JihankiBot()
+
+async def apply_generation_badge(member: discord.Member, role_name: str, suffix: str):
+    try:
+        role = discord.utils.get(member.guild.roles, name=role_name)
+        if role and role not in member.roles:
+            await member.add_roles(role)
+    except Exception as e:
+        print(f"世代ロール付与エラー: {e}")
+
+    try:
+        base_name = member.display_name
+        for _, _, s in GENERATION_TIERS:
+            if base_name.endswith(s):
+                base_name = base_name[:-len(s)].strip()
+        max_base_len = 32 - len(suffix)
+        new_nick = f"{base_name[:max_base_len]}{suffix}"
+        if member.nick != new_nick:
+            await member.edit(nick=new_nick)
+    except Exception as e:
+        print(f"ニックネーム変更エラー: {e}")
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    if member.bot or member.id == OWNER_ID:
+        return
+
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT role_name, suffix FROM member_generations WHERE user_id = ?", (member.id,))
+    existing = cursor.fetchone()
+
+    if existing:
+        role_name, suffix = existing
+    else:
+        cursor.execute("SELECT COUNT(*) FROM member_generations")
+        (current_count,) = cursor.fetchone()
+        next_order = current_count + 1
+
+        role_name = ""
+        suffix = ""
+        for max_num, r_name, s_text in GENERATION_TIERS:
+            if next_order <= max_num:
+                role_name = r_name
+                suffix = s_text
+                break
+
+        if role_name:
+            cursor.execute(
+                "INSERT INTO member_generations (user_id, role_name, suffix) VALUES (?, ?, ?)",
+                (member.id, role_name, suffix)
+            )
+            conn.commit()
+    conn.close()
+
+    if role_name:
+        await apply_generation_badge(member, role_name, suffix)
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    if after.bot or after.id == OWNER_ID:
+        return
+    if before.nick != after.nick:
+        conn = sqlite3.connect('vending.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT role_name, suffix FROM member_generations WHERE user_id = ?", (after.id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            role_name, suffix = row
+            if not after.display_name.endswith(suffix):
+                await apply_generation_badge(after, role_name, suffix)
 
 @tasks.loop(minutes=1.0)
 async def keep_alive_pulse():
