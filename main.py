@@ -583,6 +583,28 @@ async def slash_view_un_stock(interaction: discord.Interaction, product_code: st
     result_text += "━━━━━━━━━━━━━━━━━━━━━━━━"
     await interaction.followup.send(result_text, ephemeral=True)
 
+@bot.tree.command(name="delete_stock", description="【管理者専用】/view_un_stock で確認した「何番目」の在庫を1個だけ削除します")
+async def slash_delete_stock(interaction: discord.Interaction, product_code: str, number: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used != 1 ORDER BY id ASC", (product_code,))
+    rows = cursor.fetchall()
+    
+    if not rows or number < 1 or number > len(rows):
+        await interaction.followup.send(f"❌ 指定された番号（{number}番目）の在庫は見つかりませんでした。", ephemeral=True)
+        conn.close()
+        return
+        
+    target_id, target_data = rows[number - 1]
+    cursor.execute("DELETE FROM inventory WHERE id = ?", (target_id,))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(f"🗑️ 商品コード `{product_code}` の **{number}番目** の在庫を1個だけ削除しました！\n削除したデータ:\n```\n{target_data}\n```", ephemeral=True)
+
 @bot.tree.command(name="delete_product", description="商品を削除します")
 async def slash_product_delete(interaction: discord.Interaction, product_code: str):
     if interaction.user.id != OWNER_ID:
