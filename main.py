@@ -2,7 +2,6 @@ import os
 import asyncio
 import sqlite3
 import aiohttp
-from aiohttp import web
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -655,19 +654,6 @@ async def slash_add_ticket(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=TicketPanelView())
     await interaction.followup.send("✅ サポートチケット発行パネルを設置しました！", ephemeral=True)
 
-async def handle_health(request):
-    return web.Response(text="Bot is running 24/7!")
-
-async def start_self_server():
-    app = web.Application()
-    app.router.add_get('/', handle_health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    print(f"Self server started on port {port}")
-
 @tasks.loop(minutes=1.0)
 async def self_ping_loop():
     port = int(os.environ.get("PORT", 10000))
@@ -683,7 +669,6 @@ async def main():
     if not TOKEN:
         print("エラー: DISCORD_TOKENが設定されていません")
         return
-    await start_self_server()
     if not self_ping_loop.is_running():
         self_ping_loop.start()
     async with bot:
