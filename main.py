@@ -1,6 +1,8 @@
 import os
 import asyncio
 import sqlite3
+import aiohttp
+from aiohttp import web
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -54,7 +56,6 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-
 class VendingMainView(View):
     def __init__(self, game_filter: str = "ぷにぷに"):
         super().__init__(timeout=None)
@@ -96,6 +97,7 @@ class VendingMainView(View):
         view = View(timeout=60)
         view.add_item(ProductSelect(options))
         await interaction.followup.send(f"【{self.game_filter}自販機】購入したい商品を選択してください:", view=view, ephemeral=True)
+
     @discord.ui.button(label="在庫・販売数の確認", style=discord.ButtonStyle.primary)
     async def stock_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True)
@@ -163,7 +165,6 @@ class ProductSelect(Select):
         g_title, p_name, p_price = product
         view = QuantitySelectView(code, g_title, p_name, p_price, stock_count)
         await interaction.followup.send(f"商品 **[{g_title}] {p_name}** の購入個数を選択してください：", view=view, ephemeral=True)
-
 class QuantitySelectView(View):
     def __init__(self, code, game, name, single_price, max_stock):
         super().__init__(timeout=60)
@@ -271,7 +272,6 @@ class PayModal(discord.ui.Modal):
             await interaction.followup.send("✅ PayPayリンクを提出しました。運営の確認をお待ちください。", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ エラーが発生しました: {e}", ephemeral=True)
-
 class OwnerApproveView(View):
     def __init__(self, buyer_id, code, inv_ids_str, quantity, total_price, guild_name, guild_id):
         super().__init__(timeout=None)
@@ -381,6 +381,7 @@ class OwnerApproveView(View):
                 
         except Exception as e:
             await interaction.followup.send(f"❌ 購入者へのDM送信に失敗しました: {e}", ephemeral=True)
+
     @discord.ui.button(label="🔴 拒否(リンク無効/キャンセル)", style=discord.ButtonStyle.danger, custom_id="btn_owner_deny")
     async def deny_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True)
@@ -398,14 +399,12 @@ class OwnerApproveView(View):
         for item in self.children:
             item.disabled = True
         await interaction.message.edit(view=self)
-        
         try:
             buyer = await interaction.client.fetch_user(self.buyer_id)
             await buyer.send("❌ 運営によりPayPay送金リンクが承認されませんでした。金額やURLをお確かめの上、再度お手続きください。")
         except:
             pass
         await interaction.followup.send("❌ 取引を拒否(キャンセル)し、キープされていた在庫を完全に1番手へ復旧しました!", ephemeral=True)
-
 class TicketPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -494,6 +493,10 @@ async def keep_alive_pulse():
             await msg.delete()
     except Exception as e:
         print(f"Keep alive error: {e}")
+
+@keep_alive_pulse.error
+async def keep_alive_pulse_error(error):
+    print(f"心臓マッサージエラー検知（自動復旧します）: {error}")
 
 @bot.event
 async def on_ready():
@@ -652,7 +655,39 @@ async def slash_add_ticket(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=TicketPanelView())
     await interaction.followup.send("✅ サポートチケット発行パネルを設置しました！", ephemeral=True)
 
-TOKEN = os.getenv('DISCORD_TOKEN')
+async def handle_health(request):
+    return web.Response(text="Bot is running 24/7!")
+
+async def start_self_server():
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Self server started on port {port}")
+
+@tasks.loop(minutes=1.0)
+async def self_ping_loop():
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}/") as resp:
+                pass
+    except Exception:
+        pass
+
+async def main():
+    TOKEN = os.getenv('DISCORD_TOKEN')
+    if not TOKEN:
+        print("エラー: DISCORD_TOKENが設定されていません")
+        return
+    await start_self_server()
+    if not self_ping_loop.is_running():
+        self_ping_loop.start()
+    async with bot:
+        await bot.start(TOKEN, reconnect=True)
+
 if __name__ == '__main__':
-    if TOKEN:
-        bot.run(TOKEN)
+    asyncio.run(main())
