@@ -360,7 +360,7 @@ class QuantitySelect(Select):
 
         pay_embed = discord.Embed(
             title="PayPay決済手続き", 
-            description=f"商品:**[{self.game}] {self.name}**\n購入数:**{quantity}個**\nお支払い金額:**{total_price}円**\n\n【購入手順】\n1. クーポンをお持ちの場合は下の「🎟️ クーポンを使う」を押してください。\n2. あなたのPayPayアプリで「**{total_price}円の送金リンク**」を作成してください。\n3. 「PayPayリンクを入力する」を押し、URLを入力して提出してください。\n4. 運営が入金確認を完了した瞬間に、あなたのDMへ商品が自動送信されます!", 
+            description=f"商品:**[{self.game}] {self.name}**\n購入数:**{quantity}個**\nお支払い金額:**{total_price:,}円**\n\n【購入手順】\n1. クーポンをお持ちの場合は下の「🎟️ クーポンを使う」を押してください。\n2. あなたのPayPayアプリで「**{total_price}円の送金リンク**」を作成してください。\n3. 「PayPayリンクを入力する」を押し、URLを入力して提出してください。\n4. 運営が入金確認を完了した瞬間に、あなたのDMへ商品が自動送信されます!", 
             color=discord.Color.blue()
         )
         view = PaymentActionView(self.code, self.game, self.name, total_price, inv_ids_str, quantity, "")
@@ -397,7 +397,7 @@ class CouponApplyModal(Modal):
         self.price = price
         self.inv_ids_str = inv_ids_str
         self.quantity = quantity
-        self.coupon_input = TextInput(label="クーポンコードを入力してください", placeholder="例: OPEN100", required=True)
+        self.coupon_input = TextInput(label="クーポンコードを入力してください", placeholder="例: SAIKOSAN20", required=True)
         self.add_item(self.coupon_input)
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -417,14 +417,21 @@ class CouponApplyModal(Modal):
             await interaction.followup.send("❌ このクーポンは使用上限に達しています。", ephemeral=True)
             return
 
-        new_price = max(1, self.price - discount)
+        if 1 <= discount <= 99:
+            off_yen = int(self.price * (discount / 100))
+            new_price = max(1, self.price - off_yen)
+            discount_label = f"-{discount}% ({off_yen:,}円引き)"
+        else:
+            new_price = max(1, self.price - discount)
+            discount_label = f"-{discount:,}円"
+
         cursor.execute("UPDATE coupons SET remaining_uses = remaining_uses - 1 WHERE code = ?", (c_code,))
         conn.commit()
         conn.close()
 
         pay_embed = discord.Embed(
             title="PayPay決済手続き（クーポン適用済み🎉）", 
-            description=f"商品:**[{self.game}] {self.name}**\n購入数:**{self.quantity}個**\n適用クーポン:**`{c_code}` (-{discount}円)**\n割引後のお支払い金額:**{new_price}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{new_price}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、URLを入力して提出してください。", 
+            description=f"商品:**[{self.game}] {self.name}**\n購入数:**{self.quantity}個**\n適用クーポン:**`{c_code}` ({discount_label})**\n割引後のお支払い金額:**{new_price:,}円**\n\n【購入手順】\n1. あなたのPayPayアプリで「**{new_price}円の送金リンク**」を作成してください。\n2. 下のボタンを押し、URLを入力して提出してください。", 
             color=discord.Color.green()
         )
         view = PaymentActionView(self.code, self.game, self.name, new_price, self.inv_ids_str, self.quantity, c_code)
@@ -701,7 +708,7 @@ async def giveaway_check_loop():
     for msg_id, ch_id, prize, winners_count in due_list:
         cursor.execute("UPDATE giveaways SET ended = 1 WHERE message_id = ?", (msg_id,))
         cursor.execute("SELECT user_id FROM giveaway_entries WHERE message_id = ?", (msg_id,))
-        entries = [r for r in cursor.fetchall()]
+        entries = [r[0] for r in cursor.fetchall()]
         conn.commit()
 
         channel = bot.get_channel(ch_id)
@@ -1088,8 +1095,8 @@ async def slash_add_ticket(interaction: discord.Interaction):
     await interaction.channel.send(embed=embed, view=TicketPanelView())
     await interaction.followup.send("✅ サポートチケット発行パネルを設置しました！", ephemeral=True)
 
-@bot.tree.command(name="create_coupon", description="【管理者専用】割引クーポンを発行します")
-async def slash_create_coupon(interaction: discord.Interaction, code: str, discount_amount: int, max_uses: int):
+@bot.tree.command(name="create_coupon", description="【管理者専用】割引クーポンを発行（1〜99は%OFF、100以上は円引き／DM直送可）")
+async def slash_create_coupon(interaction: discord.Interaction, code: str, discount_amount: int, max_uses: int, target_user: discord.Member = None):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
         return
@@ -1100,7 +1107,23 @@ async def slash_create_coupon(interaction: discord.Interaction, code: str, disco
     cursor.execute("INSERT OR REPLACE INTO coupons (code, discount_amount, remaining_uses) VALUES (?, ?, ?)", (c_code, discount_amount, max_uses))
     conn.commit()
     conn.close()
-    await interaction.followup.send(f"🎟️ クーポン **`{c_code}`**（**{discount_amount}円引き** / 上限 **{max_uses}回**）を発行しました！", ephemeral=True)
+
+    unit_text = f"{discount_amount}%OFF" if 1 <= discount_amount <= 99 else f"{discount_amount:,}円引き"
+
+    if target_user:
+        try:
+            gift_embed = discord.Embed(
+                title="🎁 特別割引クーポンが届きました！",
+                description=f"**Game.VM** 運営より、あなた専用の特別割引クーポンが贈られました！\n\n🎟️ **クーポンコード:** `{c_code}`\n💰 **割引内容:** **{unit_text}**（利用上限: {max_uses}回）\n\n【使い方】\n自販機の購入手続き画面で「🎟️ クーポンを使う」を押して上記のコードを入力してください！",
+                color=discord.Color.gold()
+            )
+            gift_embed.set_footer(text="Game.VM 会員特典システム")
+            await target_user.send(embed=gift_embed)
+            await interaction.followup.send(f"🎟️ クーポン **`{c_code}`**（{unit_text}）を発行し、**{target_user.display_name}** 様のDMへ直接送信しました！", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"⚠️ クーポン **`{c_code}`** は発行しましたが、相手のDM送信に失敗しました: {e}", ephemeral=True)
+    else:
+        await interaction.followup.send(f"🎟️ クーポン **`{c_code}`**（**{unit_text}** / 上限 **{max_uses}回**）を発行しました！", ephemeral=True)
 
 @bot.tree.command(name="giveaway", description="【管理者専用】このチャンネルでプレゼント企画（自動抽選）を開催します")
 async def slash_giveaway(interaction: discord.Interaction, prize: str, winners_count: int, duration_minutes: int):
