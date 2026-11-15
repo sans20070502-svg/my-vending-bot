@@ -14,6 +14,7 @@ JISSEKI_CHANNEL_ID = 1569714481007689758
 TICKET_STAFF_ROLE_ID = 1569872554514980954
 KEEP_ALIVE_CHANNEL_ID = 1569037305644056639
 RESTOCK_CHANNEL_ID = 1570630479244296312
+SALES_LOG_CHANNEL_ID = 1571447334397673512
 
 RANK_TIERS = (
     (50000, 1569594036875174009, "【ダイヤ】大御所"),
@@ -39,9 +40,14 @@ def init_db():
             code TEXT PRIMARY KEY,
             game_title TEXT,
             name TEXT,
-            price INTEGER
+            price INTEGER,
+            description TEXT DEFAULT ''
         )
     ''')
+    try:
+        cursor.execute("ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,8 +112,57 @@ def init_db():
             PRIMARY KEY (message_id, user_id)
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sold_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            buyer_id INTEGER,
+            buyer_name TEXT,
+            product_code TEXT,
+            game_title TEXT,
+            product_name TEXT,
+            quantity INTEGER,
+            total_price INTEGER,
+            account_data TEXT,
+            sold_timestamp INTEGER
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS blacklist (
+            user_id INTEGER PRIMARY KEY,
+            reason TEXT,
+            added_timestamp INTEGER
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_titles (
+            user_id INTEGER PRIMARY KEY,
+            custom_title TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
+
+def is_maintenance_mode() -> bool:
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM bot_settings WHERE key = 'maintenance'")
+    row = cursor.fetchone()
+    conn.close()
+    return bool(row and row[0] == '1')
+
+def check_blacklisted(user_id: int):
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT reason FROM blacklist WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 def count_existing_generation_members(guild: discord.Guild) -> int:
     counted_ids = set()
     for _, r_name, _ in GENERATION_TIERS:
@@ -144,7 +199,7 @@ async def notify_restock(client: discord.Client, product_code: str, added_count:
     cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (product_code,))
     prod = cursor.fetchone()
     cursor.execute("SELECT user_id FROM restock_alerts WHERE product_code = ?", (product_code,))
-    alert_users = [r for r in cursor.fetchall()]
+    alert_users = [r[0] for r in cursor.fetchall()]
     if alert_users:
         cursor.execute("DELETE FROM restock_alerts WHERE product_code = ?", (product_code,))
         conn.commit()
@@ -178,6 +233,7 @@ async def notify_restock(client: discord.Client, product_code: str, added_count:
             await restock_ch.send(embed=ch_embed)
     except Exception as e:
         print(f"入荷チャンネル投稿エラー: {e}")
+
 class VendingMainView(View):
     def __init__(self, game_filter: str = "ぷにぷに"):
         super().__init__(timeout=None)
@@ -194,11 +250,18 @@ class VendingMainView(View):
     @discord.ui.button(label="購入する", style=discord.ButtonStyle.success)
     async def buy_button(self, interaction: discord.Interaction, button: Button):
         await interaction.response.defer(ephemeral=True)
+        if interaction.user.id != OWNER_ID:
+            if is_maintenance_mode():
+                await interaction.followup.send("🔧 現在、自販機はメンテナンス中のため購入を一時停止しております。再開まで今しばらくお待ちください。", ephemeral=True)
+                return
+            ban_reason = check_blacklisted(interaction.user.id)
+            if ban_reason is not None:
+                await interaction.followup.send(f"⛔ あなたは現在このショップの利用を制限されています。（理由: {ban_reason}）", ephemeral=True)
+                return
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
         cursor.execute("SELECT code, game_title, name, price FROM products WHERE game_title = ?", (self.game_filter,))
         products = cursor.fetchall()
-        
         if not products:
             conn.close()
             await interaction.followup.send(f"現在、{self.game_filter}の販売中の商品はございません。", ephemeral=True)
@@ -297,14 +360,13 @@ class RestockAlertSelect(Select):
 class ProductSelect(Select):
     def __init__(self, options):
         super().__init__(placeholder="商品を選んでください...", min_values=1, max_values=1, options=options)
-
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         (code,) = self.values
         
         conn = sqlite3.connect('vending.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT game_title, name, price FROM products WHERE code = ?", (code,))
+        cursor.execute("SELECT game_title, name, price, description FROM products WHERE code = ?", (code,))
         product = cursor.fetchone()
         cursor.execute("SELECT stock_count FROM manual_stock WHERE product_code = ?", (code,))
         row = cursor.fetchone()
@@ -320,9 +382,11 @@ class ProductSelect(Select):
             await interaction.followup.send("❌ 申し訳ありません。選ばれた商品は現在在庫切れです。「🔔 再入荷通知」を登録しておくと補充時にDMでお知らせします！", ephemeral=True)
             return
 
-        g_title, p_name, p_price = product
+        g_title, p_name, p_price, p_desc = product
+        desc_text = f"\n📝 **商品説明:** {p_desc}" if p_desc else ""
         view = QuantitySelectView(code, g_title, p_name, p_price, stock_count)
-        await interaction.followup.send(f"商品 **[{g_title}] {p_name}** の購入個数を選択してください：", view=view, ephemeral=True)
+        await interaction.followup.send(f"商品 **[{g_title}] {p_name}**（単価: {p_price:,}円）{desc_text}\n購入個数を選択してください：", view=view, ephemeral=True)
+
 class QuantitySelectView(View):
     def __init__(self, code, game, name, single_price, max_stock):
         super().__init__(timeout=60)
@@ -399,7 +463,6 @@ class CouponApplyModal(Modal):
         self.quantity = quantity
         self.coupon_input = TextInput(label="クーポンコードを入力してください", placeholder="例: SAIKOSAN20", required=True)
         self.add_item(self.coupon_input)
-
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         c_code = self.coupon_input.value.strip().upper()
@@ -489,6 +552,7 @@ class PayModal(Modal):
             await interaction.followup.send("✅ PayPayリンクを提出しました。運営の確認をお待ちください。", ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ エラーが発生しました: {e}", ephemeral=True)
+
 class ReviewTriggerView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -496,7 +560,6 @@ class ReviewTriggerView(View):
     @discord.ui.button(label="⭐ 購入レビューを書く", style=discord.ButtonStyle.primary, custom_id="btn_write_review")
     async def open_review_modal(self, interaction: discord.Interaction, button: Button):
         await interaction.response.send_modal(ReviewModal())
-
 class ReviewModal(Modal):
     def __init__(self):
         super().__init__(title="ショップのレビュー投稿")
@@ -634,6 +697,43 @@ class OwnerApproveView(View):
                     await jisseki_channel.send(embed=jisseki_embed)
             except Exception as j_err:
                 print(f"実績投稿エラー: {j_err}")
+
+            sold_ts = int(time.time())
+            try:
+                conn_log = sqlite3.connect('vending.db')
+                cur_log = conn_log.cursor()
+                cur_log.execute(
+                    "INSERT INTO sold_logs (buyer_id, buyer_name, product_code, game_title, product_name, quantity, total_price, account_data, sold_timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (buyer.id, str(buyer), self.code, g_title, name, self.quantity, self.total_price, final_account_data, sold_ts)
+                )
+                conn_log.commit()
+                conn_log.close()
+            except Exception as db_log_err:
+                print(f"販売履歴DB保存エラー: {db_log_err}")
+
+            try:
+                sales_log_ch = interaction.client.get_channel(SALES_LOG_CHANNEL_ID) or await interaction.client.fetch_channel(SALES_LOG_CHANNEL_ID)
+                if sales_log_ch:
+                    if isinstance(sales_log_ch, discord.TextChannel) and sales_log_ch.guild:
+                        owner_member = sales_log_ch.guild.get_member(OWNER_ID)
+                        current_default = sales_log_ch.overwrites_for(sales_log_ch.guild.default_role)
+                        if current_default.view_channel is not False:
+                            await sales_log_ch.set_permissions(sales_log_ch.guild.default_role, view_channel=False)
+                        if owner_member:
+                            owner_ow = sales_log_ch.overwrites_for(owner_member)
+                            if owner_ow.view_channel is not True:
+                                await sales_log_ch.set_permissions(owner_member, view_channel=True, read_message_history=True)
+                    log_embed = discord.Embed(
+                        title="🔐 【オーナー専用】詳細販売ログ",
+                        description=f"**販売日時:** <t:{sold_ts}:F>\n**購入者:** {buyer.mention} (`{buyer.name}` / ID: `{buyer.id}`)\n**商品:** [{g_title}] {name} (`{self.code}`)\n**購入数:** {self.quantity}個\n**売上金額:** **{self.total_price:,}円**",
+                        color=discord.Color.dark_gold()
+                    )
+                    safe_data = final_account_data if len(final_account_data) <= 1000 else final_account_data[:1000] + "\n...(省略)"
+                    log_embed.add_field(name="🔑 引き渡し済みアカウント・コード", value=f"```\n{safe_data}\n```", inline=False)
+                    log_embed.set_footer(text="Game.VM オーナー限定機密ログ")
+                    await sales_log_ch.send(embed=log_embed)
+            except Exception as log_err:
+                print(f"オーナー専用販売ログ送信エラー: {log_err}")
                 
         except Exception as e:
             await interaction.followup.send(f"❌ 購入者へのDM送信に失敗しました: {e}", ephemeral=True)
@@ -708,7 +808,7 @@ async def giveaway_check_loop():
     for msg_id, ch_id, prize, winners_count in due_list:
         cursor.execute("UPDATE giveaways SET ended = 1 WHERE message_id = ?", (msg_id,))
         cursor.execute("SELECT user_id FROM giveaway_entries WHERE message_id = ?", (msg_id,))
-        entries = [r[0] for r in cursor.fetchall()]
+        entries = [r for r in cursor.fetchall()]
         conn.commit()
 
         channel = bot.get_channel(ch_id)
@@ -738,7 +838,6 @@ async def giveaway_check_loop():
 @giveaway_check_loop.error
 async def giveaway_check_loop_error(error):
     print(f"ギブアウェイループエラー検知: {error}")
-
 class TicketPanelView(View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -803,17 +902,105 @@ class TicketCloseView(View):
             await interaction.channel.delete()
         except Exception as e:
             print(f"チケット削除エラー: {e}")
+class OrderRequestModal(Modal):
+    def __init__(self):
+        super().__init__(title="キャラ指定アカウント オーダー申請")
+        self.game_input = TextInput(label="ゲーム名（例: バウンティ / ぷにぷに / 原神）", placeholder="バウンティラッシュ（iOS版）", required=True)
+        self.chara_input = TextInput(label="希望キャラ・条件（複数可）", style=discord.TextStyle.paragraph, placeholder="例: 緑ロジャー・ニカ共存、ダイヤ1000個以上など", required=True)
+        self.budget_input = TextInput(label="ご予算（円）", placeholder="例: 3000円〜5000円くらい", required=True)
+        self.add_item(self.game_input)
+        self.add_item(self.chara_input)
+        self.add_item(self.budget_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("❌ サーバー内でのみ使用できます。", ephemeral=True)
+            return
+
+        channel_topic_tag = f"order-owner:{interaction.user.id}"
+        for ch in guild.text_channels:
+            if ch.topic == channel_topic_tag:
+                await interaction.followup.send(f"❌ すでに開いているオーダー専用チケットがあります: {ch.mention}", ephemeral=True)
+                return
+
+        staff_role = guild.get_role(TICKET_STAFF_ROLE_ID)
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
+
+        category = interaction.channel.category if isinstance(interaction.channel, discord.TextChannel) else None
+        safe_name = "".join(c for c in interaction.user.name.lower() if c.isalnum()) or "user"
+
+        try:
+            order_channel = await guild.create_text_channel(
+                name=f"order-{safe_name}",
+                overwrites=overwrites,
+                category=category,
+                topic=channel_topic_tag
+            )
+            order_embed = discord.Embed(
+                title="🎯 キャラ指定アカウント オーダー受付",
+                description=f"{interaction.user.mention} 様、オーダー専用チケットを作成しました！\nスタッフが在庫・仕入れ状況を確認して見積もりをご案内します。",
+                color=discord.Color.orange()
+            )
+            order_embed.add_field(name="🎮 希望ゲーム", value=self.game_input.value, inline=False)
+            order_embed.add_field(name="✨ 希望キャラ・条件", value=f"```\n{self.chara_input.value}\n```", inline=False)
+            order_embed.add_field(name="💰 ご予算", value=self.budget_input.value, inline=False)
+            order_embed.set_footer(text="対応完了後は下のボタンからチケットを閉じてください。")
+
+            mention_text = f"{interaction.user.mention}"
+            if staff_role:
+                mention_text += f" {staff_role.mention}"
+
+            await order_channel.send(content=mention_text, embed=order_embed, view=TicketCloseView())
+            await interaction.followup.send(f"✅ オーダー専用チャンネルを作成しました: {order_channel.mention}", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ オーダーチケットの作成に失敗しました: {e}", ephemeral=True)
+
+class OrderTicketPanelView(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎯 キャラ指定オーダーを依頼する", style=discord.ButtonStyle.primary, custom_id="btn_order_ticket_create")
+    async def create_order_ticket(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != OWNER_ID:
+            if is_maintenance_mode():
+                await interaction.response.send_message("🔧 現在、メンテナンス中のため新規オーダー受付を一時停止しております。", ephemeral=True)
+                return
+            ban_reason = check_blacklisted(interaction.user.id)
+            if ban_reason is not None:
+                await interaction.response.send_message(f"⛔ あなたは現在このショップの利用を制限されています。（理由: {ban_reason}）", ephemeral=True)
+                return
+        await interaction.response.send_modal(OrderRequestModal())
 class JihankiBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=commands.when_mentioned_or('!'), intents=discord.Intents.all())
 
     async def setup_hook(self):
         init_db()
-        self.add_view(VendingMainView(game_filter="ぷにぷに"))
-        self.add_view(VendingMainView(game_filter="バウンティ"))
-        self.add_view(VendingMainView(game_filter="モンスト"))
+        default_games = {"ぷにぷに", "バウンティ", "モンスト"}
+        try:
+            conn = sqlite3.connect('vending.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT game_title FROM products WHERE game_title IS NOT NULL AND game_title != ''")
+            for (g_title,) in cursor.fetchall():
+                default_games.add(g_title)
+            conn.close()
+        except Exception as e:
+            print(f"自販機View復元読み込みエラー: {e}")
+
+        for g_name in default_games:
+            self.add_view(VendingMainView(game_filter=g_name))
+
         self.add_view(TicketPanelView())
         self.add_view(TicketCloseView())
+        self.add_view(OrderTicketPanelView())
         self.add_view(GiveawayJoinView())
         self.add_view(ReviewTriggerView())
 
@@ -856,7 +1043,6 @@ async def on_member_join(member: discord.Member):
 
     if role_name:
         await apply_generation_badge(member, role_name, suffix)
-
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
     if after.bot or after.id == OWNER_ID:
@@ -900,8 +1086,9 @@ async def on_ready():
             print("Giveaway check loop started successfully.")
     except Exception as e:
         print(f"Sync error: {e}")
+
 @bot.tree.command(name="add_product", description="新しい商品を登録します")
-async def slash_product_add(interaction: discord.Interaction, code: str, game_title: str, name: str, price: int):
+async def slash_product_add(interaction: discord.Interaction, code: str, game_title: str, name: str, price: int, description: str = ""):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
         return
@@ -909,8 +1096,9 @@ async def slash_product_add(interaction: discord.Interaction, code: str, game_ti
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO products (code, game_title, name, price) VALUES (?, ?, ?, ?)", (code, game_title, name, price))
+        cursor.execute("INSERT INTO products (code, game_title, name, price, description) VALUES (?, ?, ?, ?, ?)", (code, game_title, name, price, description))
         conn.commit()
+        interaction.client.add_view(VendingMainView(game_filter=game_title))
         await interaction.followup.send(f"✅ 商品を登録しました:[{game_title}] {name} ({price}円)", ephemeral=True)
     except:
         await interaction.followup.send("❌ すでに存在する商品コードです。", ephemeral=True)
@@ -937,7 +1125,6 @@ async def slash_set_stock(interaction: discord.Interaction, product_code: str, s
     if stock_count > 0:
         await notify_restock(interaction.client, product_code, stock_count)
     await interaction.followup.send(f"✅ 商品 `{product_code}` の在庫数を直接 **{stock_count}個** に設定し、入荷通知を送信しました!", ephemeral=True)
-
 @bot.tree.command(name="add_stock", description="在庫にアカウントデータを1個追加し、入荷通知を送信します")
 async def slash_stock_add(interaction: discord.Interaction, product_code: str, account_data: str):
     if interaction.user.id != OWNER_ID:
@@ -1001,6 +1188,8 @@ async def slash_view_un_stock(interaction: discord.Interaction, product_code: st
         status = "【キープ中(手続き中)】" if used == 2 else "【在庫あり】"
         result_text += f"{idx}番目:{status}\n```\n{data}\n```\n"
     result_text += "━━━━━━━━━━━━━━━━━━━━━━━━"
+    if len(result_text) > 1950:
+        result_text = result_text[:1950] + "\n...(長すぎるため一部省略)"
     await interaction.followup.send(result_text, ephemeral=True)
 
 @bot.tree.command(name="delete_stock", description="【管理者専用】/view_un_stock で確認した「何番目」の在庫を1個だけ削除します")
@@ -1025,6 +1214,58 @@ async def slash_delete_stock(interaction: discord.Interaction, product_code: str
     conn.close()
     await interaction.followup.send(f"🗑️ 商品コード `{product_code}` の **{number}番目** の在庫を1個だけ削除しました！\n削除したデータ:\n```\n{target_data}\n```", ephemeral=True)
 
+@bot.tree.command(name="edit_product", description="【管理者専用】登録済み商品の商品名・価格・説明文を修正します")
+async def slash_edit_product(interaction: discord.Interaction, product_code: str, new_name: str = None, new_price: int = None, new_description: str = None):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT game_title, name, price, description FROM products WHERE code = ?", (product_code,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        await interaction.followup.send("❌ 存在しない商品コードです。", ephemeral=True)
+        return
+
+    g_title, cur_name, cur_price, cur_desc = row
+    upd_name = new_name if new_name is not None else cur_name
+    upd_price = new_price if new_price is not None else cur_price
+    upd_desc = new_description if new_description is not None else (cur_desc or "")
+
+    cursor.execute("UPDATE products SET name = ?, price = ?, description = ? WHERE code = ?", (upd_name, upd_price, upd_desc, product_code))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(
+        f"✅ 商品 `{product_code}` を更新しました！\n・タイトル: **[{g_title}] {upd_name}**\n・価格: **{upd_price:,}円**\n・説明文: {upd_desc if upd_desc else '（なし）'}",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="edit_stock", description="【管理者専用】/view_un_stock で確認した「何番目」の在庫データを修正します")
+async def slash_edit_stock(interaction: discord.Interaction, product_code: str, number: int, new_account_data: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, account_data FROM inventory WHERE product_code = ? AND used != 1 ORDER BY id ASC", (product_code,))
+    rows = cursor.fetchall()
+
+    if not rows or number < 1 or number > len(rows):
+        conn.close()
+        await interaction.followup.send(f"❌ 指定された番号（{number}番目）の在庫は見つかりませんでした。", ephemeral=True)
+        return
+
+    target_id, old_data = rows[number - 1]
+    cursor.execute("UPDATE inventory SET account_data = ? WHERE id = ?", (new_account_data, target_id))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(
+        f"✅ 商品 `{product_code}` の **{number}番目** の在庫データを修正しました！\n【修正後】\n```\n{new_account_data}\n```",
+        ephemeral=True
+    )
 @bot.tree.command(name="delete_product", description="商品を削除します")
 async def slash_product_delete(interaction: discord.Interaction, product_code: str):
     if interaction.user.id != OWNER_ID:
@@ -1046,20 +1287,17 @@ async def slash_product_delete(interaction: discord.Interaction, product_code: s
     conn.commit()
     conn.close()
     await interaction.followup.send(f"🗑️ 商品「{product_name}」とそのデータをすべて削除しました。", ephemeral=True)
-@bot.tree.command(name="add_vending", description="【管理者専用】指定したゲームの自販機パネルをこのチャンネルに設置します")
-@app_commands.choices(game_title=[
-    app_commands.Choice(name="ぷにぷに", value="ぷにぷに"),
-    app_commands.Choice(name="バウンティ", value="バウンティ"),
-    app_commands.Choice(name="モンスト", value="モンスト")
-])
+
+@bot.tree.command(name="add_vending", description="【管理者専用】指定した自販機名（自由入力可）の自販機パネルをこのチャンネルに設置します")
 async def slash_add_vending(interaction: discord.Interaction, game_title: str):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
+    game_title = game_title.strip()
     conn = sqlite3.connect('vending.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT name, price FROM products WHERE game_title = ?", (game_title,))
+    cursor.execute("SELECT name, price, description FROM products WHERE game_title = ?", (game_title,))
     products = cursor.fetchall()
     conn.close()
     
@@ -1069,13 +1307,18 @@ async def slash_add_vending(interaction: discord.Interaction, game_title: str):
         color=discord.Color.green()
     )
     if products:
-        for name, price in products:
-            embed.add_field(name=f"📦 {name}", value=f"価格: {price}円", inline=False)
+        for name, price, desc in products:
+            val_text = f"価格: {price}円"
+            if desc:
+                val_text += f"\n└ {desc}"
+            embed.add_field(name=f"📦 {name}", value=val_text, inline=False)
     else:
         embed.add_field(name="在庫なし", value=f"現在{game_title}で販売中の商品はありません。", inline=False)
     embed.set_footer(text="購入ボタンを押すとメニューが表示されます。")
     
-    await interaction.channel.send(embed=embed, view=VendingMainView(game_filter=game_title))
+    new_view = VendingMainView(game_filter=game_title)
+    interaction.client.add_view(new_view)
+    await interaction.channel.send(embed=embed, view=new_view)
     await interaction.followup.send(f"✅ 【{game_title}】専用の自販機パネルを設置しました!", ephemeral=True)
 
 @bot.tree.command(name="add_ticket", description="【管理者専用】お問い合わせ・サポートチケット発行パネルを設置します")
@@ -1094,6 +1337,23 @@ async def slash_add_ticket(interaction: discord.Interaction):
     
     await interaction.channel.send(embed=embed, view=TicketPanelView())
     await interaction.followup.send("✅ サポートチケット発行パネルを設置しました！", ephemeral=True)
+
+@bot.tree.command(name="add_order_panel", description="【管理者専用】キャラ指定アカウントの受注オーダー用チケットパネルを設置します")
+async def slash_add_order_panel(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+
+    embed = discord.Embed(
+        title="🎯 キャラ指定アカウント オーダー受付窓口",
+        description="「特定の強キャラや共存アカウントが欲しい！」「予算に合わせて探してほしい！」という方は、下の「🎯 キャラ指定オーダーを依頼する」ボタンを押してください。\n\nご希望のゲーム・キャラ・予算を入力すると、スタッフと1対1で相談できるオーダー専用チャンネルが作成されます。",
+        color=discord.Color.orange()
+    )
+    embed.set_footer(text="冷やかしや無言でのオーダー申請はお控えください。")
+
+    await interaction.channel.send(embed=embed, view=OrderTicketPanelView())
+    await interaction.followup.send("✅ キャラ指定オーダー用チケットパネルを設置しました！", ephemeral=True)
 
 @bot.tree.command(name="create_coupon", description="【管理者専用】割引クーポンを発行（1〜99は%OFF、100以上は円引き／DM直送可）")
 async def slash_create_coupon(interaction: discord.Interaction, code: str, discount_amount: int, max_uses: int, target_user: discord.Member = None):
@@ -1124,7 +1384,179 @@ async def slash_create_coupon(interaction: discord.Interaction, code: str, disco
             await interaction.followup.send(f"⚠️ クーポン **`{c_code}`** は発行しましたが、相手のDM送信に失敗しました: {e}", ephemeral=True)
     else:
         await interaction.followup.send(f"🎟️ クーポン **`{c_code}`**（**{unit_text}** / 上限 **{max_uses}回**）を発行しました！", ephemeral=True)
+@bot.tree.command(name="list_coupons", description="【管理者専用】現在発行されているクーポン一覧と残り使用回数を確認します")
+async def slash_list_coupons(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT code, discount_amount, remaining_uses FROM coupons ORDER BY code ASC")
+    rows = cursor.fetchall()
+    conn.close()
 
+    if not rows:
+        await interaction.followup.send("🎟️ 現在登録されているクーポンはありません。", ephemeral=True)
+        return
+
+    lines = []
+    for c_code, disc, rem in rows:
+        unit_text = f"{disc}%OFF" if 1 <= disc <= 99 else f"{disc:,}円引き"
+        lines.append(f"・`{c_code}` ： **{unit_text}**（残り **{rem}回**）")
+
+    embed = discord.Embed(title="🎟️ 登録済みクーポン一覧", description="\n".join(lines), color=discord.Color.gold())
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="delete_coupon", description="【管理者専用】指定したクーポンコードを削除します")
+async def slash_delete_coupon(interaction: discord.Interaction, code: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    c_code = code.strip().upper()
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM coupons WHERE code = ?", (c_code,))
+    if not cursor.fetchone():
+        conn.close()
+        await interaction.followup.send(f"❌ クーポンコード `{c_code}` は見つかりませんでした。", ephemeral=True)
+        return
+    cursor.execute("DELETE FROM coupons WHERE code = ?", (c_code,))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(f"🗑️ クーポンコード **`{c_code}`** を削除しました！", ephemeral=True)
+
+@bot.tree.command(name="view_sold_stock", description="【オーナー専用】販売済みの履歴（誰に・いつ・いくらで・どのコードが売れたか）を確認します")
+async def slash_view_sold_stock(interaction: discord.Interaction, limit: int = 10):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    safe_limit = max(1, min(25, limit))
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, buyer_id, buyer_name, game_title, product_name, quantity, total_price, account_data, sold_timestamp FROM sold_logs ORDER BY id DESC LIMIT ?",
+        (safe_limit,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        await interaction.followup.send("📭 まだ販売履歴ログが記録されていません（今後の承認分から自動記録されます）。", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=f"🔐 【オーナー専用】販売済み履歴（最新 {len(rows)} 件）",
+        color=discord.Color.dark_gold()
+    )
+    for log_id, b_id, b_name, g_title, p_name, qty, price, acc_data, ts in rows:
+        short_acc = acc_data if len(acc_data) <= 120 else acc_data[:120] + "..."
+        val = (
+            f"日時: <t:{ts}:f>\n"
+            f"購入者: <@{b_id}> (`{b_name}`)\n"
+            f"数量/金額: {qty}個 / **{price:,}円**\n"
+            f"引き渡しコード:\n```\n{short_acc}\n```"
+        )
+        embed.add_field(name=f"#{log_id} [{g_title}] {p_name}", value=val, inline=False)
+
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="release_keep", description="【管理者専用】放置されているキープ中（手続き中）の在庫を強制解除して売り場に戻します")
+async def slash_release_keep(interaction: discord.Interaction, product_code: str = None):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    if product_code:
+        cursor.execute("SELECT COUNT(*) FROM inventory WHERE product_code = ? AND used = 2", (product_code,))
+        (cnt,) = cursor.fetchone()
+        cursor.execute("UPDATE inventory SET used = 0 WHERE product_code = ? AND used = 2", (product_code,))
+        msg_text = f"🔓 商品コード `{product_code}` の放置キープ在庫（**{cnt}個**）を解除し、通常在庫に戻しました！"
+    else:
+        cursor.execute("SELECT COUNT(*) FROM inventory WHERE used = 2")
+        (cnt,) = cursor.fetchone()
+        cursor.execute("UPDATE inventory SET used = 0 WHERE used = 2")
+        msg_text = f"🔓 全商品の放置キープ在庫（合計 **{cnt}個**）を一括解除し、通常在庫に戻しました！"
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(msg_text, ephemeral=True)
+
+@bot.tree.command(name="maintenance", description="【管理者専用】自販機のメンテナンスモード（購入一時停止）のON/OFFを切り替えます")
+@app_commands.choices(mode=[
+    app_commands.Choice(name="ON（メンテナンス開始・購入停止）", value="1"),
+    app_commands.Choice(name="OFF（メンテナンス終了・販売再開）", value="0")
+])
+async def slash_maintenance(interaction: discord.Interaction, mode: str):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('maintenance', ?)", (mode,))
+    conn.commit()
+    conn.close()
+    if mode == "1":
+        await interaction.followup.send("🔧 **メンテナンスモードを ON にしました。**（お客さん側の新規購入・オーダー受付が一時停止されます）", ephemeral=True)
+    else:
+        await interaction.followup.send("🟢 **メンテナンスモードを OFF にしました。**（通常販売が再開されました）", ephemeral=True)
+
+@bot.tree.command(name="ban_buyer", description="【管理者専用】悪質なユーザーをブラックリストに登録し、自販機の利用を禁止します")
+async def slash_ban_buyer(interaction: discord.Interaction, user: discord.User, reason: str = "利用規約違反・迷惑行為"):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    if user.id == OWNER_ID:
+        await interaction.response.send_message("❌ オーナー自身をブラックリストに登録することはできません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO blacklist (user_id, reason, added_timestamp) VALUES (?, ?, ?)", (user.id, reason, int(time.time())))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(f"⛔ **{user.display_name}** (`{user.id}`) をブラックリストに登録しました。\n理由: {reason}", ephemeral=True)
+
+@bot.tree.command(name="unban_buyer", description="【管理者専用】ブラックリストに登録されたユーザーの利用制限を解除します")
+async def slash_unban_buyer(interaction: discord.Interaction, user: discord.User):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM blacklist WHERE user_id = ?", (user.id,))
+    if not cursor.fetchone():
+        conn.close()
+        await interaction.followup.send(f"❌ **{user.display_name}** はブラックリストに登録されていません。", ephemeral=True)
+        return
+    cursor.execute("DELETE FROM blacklist WHERE user_id = ?", (user.id,))
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(f"✅ **{user.display_name}** (`{user.id}`) のブラックリスト制限を解除しました！", ephemeral=True)
+
+@bot.tree.command(name="set_title", description="【オーナー専用】指定したユーザーの特別称号を手動付与・変更・解除します")
+async def slash_set_title(interaction: discord.Interaction, user: discord.Member, title: str = ""):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ 権限がありません。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    clean_title = title.strip()
+    conn = sqlite3.connect('vending.db')
+    cursor = conn.cursor()
+    if clean_title:
+        cursor.execute("INSERT OR REPLACE INTO user_titles (user_id, custom_title) VALUES (?, ?)", (user.id, clean_title))
+        res_msg = f"🏅 **{user.display_name}** 様に特別称号 **`{clean_title}`** を付与しました！（`/profile` に反映されます）"
+    else:
+        cursor.execute("DELETE FROM user_titles WHERE user_id = ?", (user.id,))
+        res_msg = f"🗑️ **{user.display_name}** 様の手動設定称号を解除しました。"
+    conn.commit()
+    conn.close()
+    await interaction.followup.send(res_msg, ephemeral=True)
 @bot.tree.command(name="giveaway", description="【管理者専用】このチャンネルでプレゼント企画（自動抽選）を開催します")
 async def slash_giveaway(interaction: discord.Interaction, prize: str, winners_count: int, duration_minutes: int):
     if interaction.user.id != OWNER_ID:
@@ -1150,6 +1582,7 @@ async def slash_giveaway(interaction: discord.Interaction, prize: str, winners_c
     conn.commit()
     conn.close()
     await interaction.followup.send(f"✅ プレゼント企画パネルを設置しました！（{duration_minutes}分後に自動抽選されます）", ephemeral=True)
+
 @bot.tree.command(name="sales_report", description="【管理者専用】現在の売上合計・在庫状況・世代別人数を確認します")
 async def slash_sales_report(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
@@ -1204,6 +1637,7 @@ async def slash_announce(interaction: discord.Interaction, title: str, message: 
     embed.set_footer(text="Game.VM 運営事務局")
     await interaction.channel.send(embed=embed)
     await interaction.followup.send("✅ お知らせを投稿しました！", ephemeral=True)
+
 @bot.tree.command(name="profile", description="自分の世代称号・現在のランク・累計購入金額を確認します")
 async def slash_profile(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -1216,14 +1650,22 @@ async def slash_profile(interaction: discord.Interaction):
 
     cursor.execute("SELECT total_spent FROM user_spending WHERE user_id = ?", (user.id,))
     spend_row = cursor.fetchone()
+
+    cursor.execute("SELECT custom_title FROM user_titles WHERE user_id = ?", (user.id,))
+    title_row = cursor.fetchone()
     conn.close()
 
     user_gen_role = ""
+    tester_role_name = ""
     if interaction.guild and isinstance(user, discord.Member):
         for _, r_name, _ in GENERATION_TIERS:
             role = discord.utils.get(interaction.guild.roles, name=r_name)
             if role and role in user.roles:
                 user_gen_role = r_name
+                break
+        for r in user.roles:
+            if "テスター" in r.name:
+                tester_role_name = r.name
                 break
 
     if user.id == OWNER_ID:
@@ -1235,6 +1677,12 @@ async def slash_profile(interaction: discord.Interaction):
         gen_text = f"**{user_gen_role}**（初期設立メンバー）"
     else:
         gen_text = "一般メンバー（称号未付与）"
+
+    special_badges = []
+    if tester_role_name:
+        special_badges.append(f"**{tester_role_name}**")
+    if title_row and title_row:
+        special_badges.append(f"**{title_row}**")
 
     (total_spent,) = spend_row if spend_row else (0,)
 
@@ -1263,6 +1711,8 @@ async def slash_profile(interaction: discord.Interaction):
     if user.avatar:
         embed.set_thumbnail(url=user.avatar.url)
     embed.add_field(name="🏛️ 世代称号", value=gen_text, inline=False)
+    if special_badges:
+        embed.add_field(name="🎖️ 特別称号・認定ロール", value=" / ".join(special_badges), inline=False)
     embed.add_field(name="👑 現在のVIPランク", value=current_rank, inline=True)
     embed.add_field(name="💰 累計購入金額", value=f"**{total_spent:,}円**", inline=True)
     embed.add_field(name="📈 ランクアップ進捗", value=next_rank_info, inline=False)
