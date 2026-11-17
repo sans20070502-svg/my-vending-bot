@@ -118,6 +118,16 @@ def init_db():
             last_status TEXT DEFAULT '未チェック'
         )
     """)
+        for alter_sql in [
+        "ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN manual_stock INTEGER DEFAULT -1",
+        "ALTER TABLE users ADD COLUMN special_title TEXT DEFAULT ''",
+    ]:
+        try:
+            c.execute(alter_sql)
+        except Exception:
+            pass
+
     defaults = {
         "maintenance": "OFF",
         "jackpot_pool": "0",
