@@ -39,7 +39,7 @@ RANK_TIERS = [
     (50000, "【神客】ロイヤルVIP"),
 ]
 # ==========================================
-# 2. データベース初期化 ＆ 共通ヘルパー
+# 2. データベース初期化 ＆ 共通ヘルパー（バックアップ完全自動修復対応）
 # ==========================================
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -118,17 +118,38 @@ def init_db():
             last_status TEXT DEFAULT '未チェック'
         )
     """)
-    for alter_sql in [
+
+    # 旧バックアップDB復元時の全テーブル不足カラム・旧データ自動修復＆移行
+    alter_and_migrate_sqls = [
         "ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN manual_stock INTEGER DEFAULT -1",
+        "ALTER TABLE users ADD COLUMN total_spent INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN ban_reason TEXT DEFAULT ''",
         "ALTER TABLE users ADD COLUMN special_title TEXT DEFAULT ''",
-                "ALTER TABLE member_generations ADD COLUMN gen_number INTEGER DEFAULT 0",
+        "ALTER TABLE member_generations ADD COLUMN gen_number INTEGER DEFAULT 0",
         "ALTER TABLE member_generations ADD COLUMN gen_role TEXT DEFAULT ''",
         "ALTER TABLE member_generations ADD COLUMN joined_at TEXT DEFAULT ''",
-
-    ]:
+        "ALTER TABLE stocks ADD COLUMN used INTEGER DEFAULT 0",
+        "ALTER TABLE stocks ADD COLUMN product_code TEXT DEFAULT ''",
+        "ALTER TABLE stocks ADD COLUMN account_data TEXT DEFAULT ''",
+        "ALTER TABLE stocks ADD COLUMN buyer_id INTEGER",
+        "ALTER TABLE stocks ADD COLUMN sold_at TEXT",
+        "UPDATE stocks SET used = is_used",
+        "UPDATE stocks SET used = status",
+        "UPDATE stocks SET product_code = code WHERE product_code = ''",
+        "UPDATE stocks SET product_code = prod_code WHERE product_code = ''",
+        "UPDATE stocks SET product_code = item_code WHERE product_code = ''",
+        "UPDATE stocks SET account_data = data WHERE account_data = ''",
+        "UPDATE stocks SET account_data = content WHERE account_data = ''",
+        "UPDATE stocks SET account_data = account WHERE account_data = ''",
+        "UPDATE stocks SET account_data = info WHERE account_data = ''",
+        "UPDATE users SET total_spent = spent WHERE total_spent = 0",
+        "UPDATE users SET total_spent = total_amount WHERE total_spent = 0",
+    ]
+    for sql in alter_and_migrate_sqls:
         try:
-            c.execute(alter_sql)
+            c.execute(sql)
         except Exception:
             pass
 
@@ -139,6 +160,7 @@ def init_db():
         "jackpot_win_rate": "10",
         "ranking_channel_id": "0",
         "ranking_message_id": "0",
+        "restock_channel_id": "0",
         "current_champion_id": "0"
     }
     for k, v in defaults.items():
@@ -236,7 +258,7 @@ async def refresh_champion_ranking(guild: discord.Guild):
     conn.close()
 
     old_champ_id = int(get_setting("current_champion_id", "0"))
-    new_champ_id = top_rows["user_id"] if top_rows else 0
+    new_champ_id = top_rows[0]["user_id"] if top_rows else 0
 
     champion_changed = False
     if new_champ_id != 0 and new_champ_id != old_champ_id:
@@ -384,13 +406,32 @@ def build_vending_embed(game_title: str) -> discord.Embed:
     return embed
 
 async def notify_restock(bot_instance: commands.Bot, product_code: str, added_count: int):
-    """再入荷通知を登録しているユーザーへ自動DM送信"""
+    """#在庫通知チャンネルへの商品入荷速報投稿 ＆ 個別通知登録者への自動DM送信"""
     conn = get_db()
     prod = conn.execute("SELECT * FROM products WHERE code = ?", (product_code,)).fetchone()
     alerts = conn.execute("SELECT user_id FROM restock_alerts WHERE product_code = ?", (product_code,)).fetchall()
     conn.close()
-    if not prod or not alerts:
+    if not prod:
         return
+
+    restock_ch_id = int(get_setting("restock_channel_id", "0"))
+    if restock_ch_id != 0:
+        ch = bot_instance.get_channel(restock_ch_id)
+        if ch:
+            try:
+                ch_embed = discord.Embed(
+                    title="📦 商品入荷速報！",
+                    description=(
+                        f"**【{prod['game_title']}】{prod['name']}** の在庫が **`{added_count}個`** 入荷しました！\n\n"
+                        f"💰 **価格: {prod['price']:,}円**\n"
+                        "🛒 24時間いつでも自販機から即購入可能です！"
+                    ),
+                    color=discord.Color.green()
+                )
+                ch_embed.set_footer(text="Game.VM 自動入荷通知システム")
+                await ch.send(embed=ch_embed)
+            except Exception:
+                pass
 
     for row in alerts:
         uid = row["user_id"]
@@ -1111,7 +1152,12 @@ class AdminControlView(discord.ui.View):
         await refresh_champion_ranking(interaction.guild)
         await interaction.response.send_message("✅ このチャンネルに **リアルタイム課金番付（覇者ランキングTOP5）** を設置しました！以降、売れるたびに自動更新されます。", ephemeral=True)
 
-    @discord.ui.button(label="🔓 放置キープ全解除", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="📢 在庫通知チャンネルを今チャンネルに設定", style=discord.ButtonStyle.success, row=1)
+    async def set_restock_ch_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        set_setting("restock_channel_id", str(interaction.channel.id))
+        await interaction.response.send_message(f"✅ {interaction.channel.mention} を **「📦 商品入荷速報！」の自動投稿チャンネル** に設定しました！", ephemeral=True)
+
+    @discord.ui.button(label="🔓 放置キープ全解除", style=discord.ButtonStyle.secondary, row=2)
     async def release_keep_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         conn = get_db()
         cur = conn.execute("UPDATE stocks SET used = 0 WHERE used = 2")
@@ -1120,14 +1166,14 @@ class AdminControlView(discord.ui.View):
         conn.close()
         await interaction.response.send_message(f"✅ 仮キープ中だった在庫 **`{cnt}個`** をすべて売り場に戻しました。", ephemeral=True)
 
-    @discord.ui.button(label="💾 今すぐDBバックアップ", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="💾 手動DBバックアップ", style=discord.ButtonStyle.secondary, row=2)
     async def quick_backup_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not os.path.exists(DB_PATH):
             await interaction.response.send_message("❌ DBファイルが見つかりません。", ephemeral=True)
             return
         fname = f"vending_backup_{int(time.time())}.db"
         await interaction.user.send(
-            content=f"💾 **手動即時バックアップ**（`{datetime.now(JST).strftime('%Y/%m/%d %H:%M:%S')}`）",
+            content=f"💾 **データベース手動バックアップ**（`{datetime.now(JST).strftime('%Y/%m/%d %H:%M:%S')}`）",
             file=discord.File(DB_PATH, filename=fname)
         )
         await interaction.response.send_message("✅ 最新のデータベースファイルをDMに送信しました！", ephemeral=True)
@@ -1305,8 +1351,6 @@ class VendingBot(commands.Bot):
 
         if not watch_hunter_loop.is_running():
             watch_hunter_loop.start()
-        if not auto_backup_loop.is_running():
-            auto_backup_loop.start()
 
         await self.tree.sync()
 
@@ -1436,24 +1480,8 @@ async def watch_hunter_loop():
                 conn2.execute("UPDATE watch_targets SET last_status = ? WHERE id = ?", (f"接続エラー: {str(e)[:40]}", tid))
                 conn2.commit()
                 conn2.close()
-
-@tasks.loop(hours=12)
-async def auto_backup_loop():
-    """12時間ごとのデータベース自動バックアップDM送信"""
-    if OWNER_ID == 0 or not os.path.exists(DB_PATH):
-        return
-    try:
-        owner = await bot.fetch_user(OWNER_ID)
-        if owner:
-            fname = f"vending_backup_{int(time.time())}.db"
-            await owner.send(
-                content=f"💾 **データベース自動バックアップ**（{datetime.now(JST).strftime('%A, %B %d, %Y at %H:%M')}）",
-                file=discord.File(DB_PATH, filename=fname)
-            )
-    except Exception:
-        pass
 # ==========================================
-# 9. スラッシュコマンド群（神機能・司令室・OCR・復元）
+# 9. スラッシュコマンド群（神機能・司令室・OCR・強化版復元）
 # ==========================================
 @bot.tree.command(name="admin", description="【オーナー専用】社長司令室（仕入れ監視・ジャックポット・下剋上番付・各種操作）を開く")
 async def cmd_admin(interaction: discord.Interaction):
@@ -1577,7 +1605,7 @@ async def cmd_ocr_stock(
     )
     view = OcrConfirmView(code, final_game, final_name, final_price, "", accounts, is_new)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-@bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付してデータを1秒で丸ごと復元")
+@bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付して全データ＋ランク＋世代を1秒で完全復元")
 @app_commands.describe(db_file="バックアップした vending_backup_xxxx.db ファイル")
 async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Attachment):
     if interaction.user.id != OWNER_ID:
@@ -1593,23 +1621,149 @@ async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Atta
     with open(DB_PATH, "wb") as f:
         f.write(raw_bytes)
 
+    # 1. 全テーブルの不足カラム・旧データを自動補完＆移行
     init_db()
 
+    # 2. サーバー内の既存世代ロール所持者を自動同期
+    guild = interaction.guild
+    gen_synced = 0
+    if guild:
+        gen_role_names = [name for _, name in GENERATION_TIERS]
+        conn_g = get_db()
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        members_sorted = sorted([m for m in guild.members if not m.bot and m.id != OWNER_ID], key=lambda x: x.joined_at or datetime.now(timezone.utc))
+        for idx, m in enumerate(members_sorted, start=1):
+            found_role = None
+            for r in m.roles:
+                if r.name in gen_role_names:
+                    found_role = r.name
+                    break
+            if found_role:
+                conn_g.execute(
+                    "INSERT OR REPLACE INTO member_generations (user_id, gen_number, gen_role, joined_at) VALUES (?, ?, ?, ?)",
+                    (m.id, idx, found_role, now_str)
+                )
+                gen_synced += 1
+        conn_g.commit()
+        conn_g.close()
+
+    # 3. 全購入者のVIPランク＆課金番付（覇者バッジ）を自動再計算
     conn = get_db()
+    buyers = conn.execute("SELECT user_id FROM users WHERE user_id != ? AND total_spent > 0", (OWNER_ID,)).fetchall()
     prod_cnt = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
     avail_cnt = conn.execute("SELECT COUNT(*) AS c FROM stocks WHERE used = 0").fetchone()["c"]
     sold_cnt = conn.execute("SELECT COUNT(*) AS c FROM stocks WHERE used = 1").fetchone()["c"]
     conn.close()
 
+    if guild:
+        for b in buyers:
+            await update_vip_rank_and_champion(guild, b["user_id"], 0)
+        await refresh_champion_ranking(guild)
+
     await interaction.followup.send(
-        f"✅ **データベースの復元が1秒で完了しました！**\n"
+        f"✅ **データベース＆ランク＆世代の完全復元が1秒で完了しました！**\n"
         f"・復元ファイル：`{db_file.filename}`\n"
         f"・登録商品数：**`{prod_cnt}商品`**（すべて自動的に安い順へ整列済み！）\n"
-        f"・未使用在庫数：**`{avail_cnt}個`** / 累計販売履歴：**`{sold_cnt}件`**",
+        f"・未使用在庫数：**`{avail_cnt}個`** / 累計販売履歴：**`{sold_cnt}件`**\n"
+        f"・世代同期完了：**`{gen_synced}名`** / VIPランク同期：**`{len(buyers)}名`**",
         ephemeral=True
     )
 
-@bot.tree.command(name="backup_db", description="【オーナー専用】現在のデータベースファイル(.db)を即座にDMへバックアップ送信")
+@bot.tree.command(name="backup_db", description="【オーナー専用】現在のデータベースファイル(.db)を手動でDMへバックアップ送信")
+async def cmd_backup_db(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
+        return
+    if not os.path.exists(DB_PATH):
+        await interaction.response.send_message("❌ データベースファイルが見つかりません。", ephemeral=True)
+        return
+    fname = f"vending_backup_{int(time.time())}.db"
+    await interaction.user.send(
+        content=f"💾 **データベース手動バックアップ**（`{datetime.now(JST).strftime('%Y/%m/%d %H:%M:%S')}`）",
+        file=discord.File(DB_PATH, filename=fname)
+    )
+    await interaction.response.send_message("✅ バックアップファイルをあなたのDMに送信しました！", ephemeral=True)
+
+@bot.tree.command(name="remove_watch", description="【オーナー専用】仕入れ先・相場自動監視リストから指定IDを削除")
+@app_commands.describe(watch_id="削除したい監視ID（/admin の監視リスト確認で表示される番号）")
+async def cmd_remove_watch(interaction: discord.Interaction, watch_id: int):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
+        return
+    conn = get_db()
+    cur = conn.execute("DELETE FROM watch_targets WHERE id = ?", (watch_id,))
+    deleted = cur.rowcount
+    conn.commit()
+    conn.close()
+    if deleted:
+        await interaction.response.send_message(f"✅ 監視ID `{watch_id}` を自動監視リストから削除しました。", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ 監視ID `{watch_id}` は見つかりませんでした。", ephemeral=True)
+@bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付して全データ＋ランク＋世代を1秒で完全復元")
+@app_commands.describe(db_file="バックアップした vending_backup_xxxx.db ファイル")
+async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Attachment):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
+        return
+
+    if not db_file.filename.endswith(".db"):
+        await interaction.response.send_message("❌ `.db` 形式のバックアップファイルを添付してください。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    raw_bytes = await db_file.read()
+    with open(DB_PATH, "wb") as f:
+        f.write(raw_bytes)
+
+    # 1. 全テーブルの不足カラム・旧データを自動補完＆移行
+    init_db()
+
+    # 2. サーバー内の既存世代ロール所持者を自動同期
+    guild = interaction.guild
+    gen_synced = 0
+    if guild:
+        gen_role_names = [name for _, name in GENERATION_TIERS]
+        conn_g = get_db()
+        now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
+        members_sorted = sorted([m for m in guild.members if not m.bot and m.id != OWNER_ID], key=lambda x: x.joined_at or datetime.now(timezone.utc))
+        for idx, m in enumerate(members_sorted, start=1):
+            found_role = None
+            for r in m.roles:
+                if r.name in gen_role_names:
+                    found_role = r.name
+                    break
+            if found_role:
+                conn_g.execute(
+                    "INSERT OR REPLACE INTO member_generations (user_id, gen_number, gen_role, joined_at) VALUES (?, ?, ?, ?)",
+                    (m.id, idx, found_role, now_str)
+                )
+                gen_synced += 1
+        conn_g.commit()
+        conn_g.close()
+
+    # 3. 全購入者のVIPランク＆課金番付（覇者バッジ）を自動再計算
+    conn = get_db()
+    buyers = conn.execute("SELECT user_id FROM users WHERE user_id != ? AND total_spent > 0", (OWNER_ID,)).fetchall()
+    prod_cnt = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
+    avail_cnt = conn.execute("SELECT COUNT(*) AS c FROM stocks WHERE used = 0").fetchone()["c"]
+    sold_cnt = conn.execute("SELECT COUNT(*) AS c FROM stocks WHERE used = 1").fetchone()["c"]
+    conn.close()
+
+    if guild:
+        for b in buyers:
+            await update_vip_rank_and_champion(guild, b["user_id"], 0)
+        await refresh_champion_ranking(guild)
+
+    await interaction.followup.send(
+        f"✅ **データベース＆ランク＆世代の完全復元が1秒で完了しました！**\n"
+        f"・復元ファイル：`{db_file.filename}`\n"
+        f"・登録商品数：**`{prod_cnt}商品`**（すべて自動的に安い順へ整列済み！）\n"
+        f"・未使用在庫数：**`{avail_cnt}個`** / 累計販売履歴：**`{sold_cnt}件`**\n"
+        f"・世代同期完了：**`{gen_synced}名`** / VIPランク同期：**`{len(buyers)}名`**",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="backup_db", description="【オーナー専用】現在のデータベースファイル(.db)を手動でDMへバックアップ送信")
 async def cmd_backup_db(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
@@ -1787,7 +1941,7 @@ async def cmd_add_stock(interaction: discord.Interaction, product_code: str, acc
     conn.close()
 
     await notify_restock(interaction.client, code, 1)
-    await interaction.response.send_message(f"✅ **【{code}】{prod['name']}** に在庫を `1件` 追加しました（再入荷通知送信済み）。", ephemeral=True)
+    await interaction.response.send_message(f"✅ **【{code}】{prod['name']}** に在庫を `1件` 追加しました（入荷通知送信済み）。", ephemeral=True)
 
 @bot.tree.command(name="bulk_add_stock", description="【オーナー専用】スラッシュ(/)区切りで複数アカウント在庫を一括追加")
 @app_commands.describe(product_code="商品コード", items_separated_by_slash="スラッシュ / で区切った複数アカウント情報")
@@ -1816,7 +1970,7 @@ async def cmd_bulk_add_stock(interaction: discord.Interaction, product_code: str
 
     await notify_restock(interaction.client, code, len(items))
     await interaction.response.send_message(
-        f"✅ **【{code}】{prod['name']}** に **`{len(items)}件`** の在庫を一括登録しました（再入荷通知送信済み）！",
+        f"✅ **【{code}】{prod['name']}** に **`{len(items)}件`** の在庫を一括登録しました（入荷通知送信済み）！",
         ephemeral=True
     )
 
@@ -2308,12 +2462,13 @@ async def cmd_help(interaction: discord.Interaction):
         embed.add_field(
             name="👑 オーナー専用・神機能＆司令室コマンド",
             value=(
-                "・`/admin` ： **社長司令室**（仕入れ監視・ジャックポット・覇者ボード設置・緊急操作）\n"
+                "・`/admin` ： **社長司令室**（仕入れ監視・ジャックポット・覇者ボード・在庫通知CH設定）\n"
                 "・`/ocr_stock` ： **スクショ1枚で新規商品登録＆在庫一括追加**\n"
-                "・`/restore_db` ： **DMのバックアップ(.db)を添付して1秒で丸ごと復元**\n"
-                "・`/backup_db` ： 現在のDBファイルを即座にDMへバックアップ送信\n"
+                "・`/restore_db` ： **DMのバックアップ(.db)を添付して全データ＋ランク＋世代を1秒完全復元**\n"
+                "・`/backup_db` ： 現在のDBファイルを手動でDMへバックアップ送信\n"
                 "・`/remove_watch` ： 自動監視リストから指定IDを削除\n"
-                "・`/sync_generations` ： 既存メンバーの世代記録をサーバー現在ロールと同期"
+                "・`/sync_generations` ： 既存メンバーの世代記録をサーバー現在ロールと同期\n"
+                "・`/recalc_ranks` ： 全購入者のVIPランク＆覇者バッジを一括再計算"
             ),
             inline=False
         )
@@ -2351,7 +2506,7 @@ async def cmd_sync_generations(interaction: discord.Interaction):
                 break
         if found_role:
             conn.execute(
-                "INSERT OR IGNORE INTO member_generations (user_id, gen_number, gen_role, joined_at) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO member_generations (user_id, gen_number, gen_role, joined_at) VALUES (?, ?, ?, ?)",
                 (m.id, idx, found_role, now_str)
             )
             synced += 1
