@@ -118,7 +118,7 @@ def init_db():
             last_status TEXT DEFAULT '未チェック'
         )
     """)
-        for alter_sql in [
+    for alter_sql in [
         "ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN manual_stock INTEGER DEFAULT -1",
         "ALTER TABLE users ADD COLUMN special_title TEXT DEFAULT ''",
@@ -165,7 +165,6 @@ def count_existing_generation_members(guild: discord.Guild) -> int:
                 if not member.bot and member.id != OWNER_ID:
                     counted_users.add(member.id)
     return len(counted_users)
-
 def ensure_user(user_id: int):
     conn = get_db()
     conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
@@ -408,7 +407,6 @@ async def notify_restock(bot_instance: commands.Bot, product_code: str, added_co
                 await user.send(embed=embed)
         except Exception:
             pass
-
 # ==========================================
 # 3. 購入フロー・決済承認・ジャックポット抽選UI
 # ==========================================
@@ -572,7 +570,6 @@ class OwnerApproveView(discord.ui.View):
         guild = interaction.client.get_guild(self.guild_id)
         await update_vip_rank_and_champion(guild, self.buyer_id, self.paid_amount)
 
-        # プログレッシブ・ジャックポット蓄積＆当選判定
         jp_pool = int(get_setting("jackpot_pool", "0"))
         jp_add = int(get_setting("jackpot_add_per_item", "20"))
         jp_rate = int(get_setting("jackpot_win_rate", "10"))
@@ -791,7 +788,7 @@ class ProductBuySelect(discord.ui.Select):
         super().__init__(placeholder="購入したい商品を選択してください（安い順）", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        code = self.values
+        code = self.values[0]
         avail = get_available_stock_count(code)
         if avail <= 0:
             await interaction.response.send_message("❌ この商品は現在売り切れです。「🔔 再入荷通知」ボタンから入荷通知を受け取れます！", ephemeral=True)
@@ -2405,6 +2402,7 @@ async def cmd_recalc_ranks(interaction: discord.Interaction):
         f"✅ 購入実績のある **`{len(rows)}名`** のVIPランクと、現在の課金番付（覇者バッジ）の同期が完了しました！",
         ephemeral=True
     )
+
 # ==========================================
 # 18. Bot実行
 # ==========================================
