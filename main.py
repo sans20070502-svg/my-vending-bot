@@ -122,6 +122,10 @@ def init_db():
         "ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN manual_stock INTEGER DEFAULT -1",
         "ALTER TABLE users ADD COLUMN special_title TEXT DEFAULT ''",
+                "ALTER TABLE member_generations ADD COLUMN gen_number INTEGER DEFAULT 0",
+        "ALTER TABLE member_generations ADD COLUMN gen_role TEXT DEFAULT ''",
+        "ALTER TABLE member_generations ADD COLUMN joined_at TEXT DEFAULT ''",
+
     ]:
         try:
             c.execute(alter_sql)
