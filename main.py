@@ -22,7 +22,7 @@ DB_PATH = "vending.db"
 
 JST = timezone(timedelta(hours=9))
 
-# 世代ロール設定（入店順で自動付与）
+# 世代ロール設定（最古参・古参枠は満員のため、新規入店は第一世代から開始）
 GENERATION_TIERS = [
     (3, "最古参☠️"),
     (15, "古参🎮"),
@@ -38,6 +38,7 @@ RANK_TIERS = [
     (30000, "【VIP】プラチナ顧客"),
     (50000, "【神客】ロイヤルVIP"),
 ]
+
 # ==========================================
 # 2. データベース初期化 ＆ 共通ヘルパー（バックアップ完全自動修復対応）
 # ==========================================
@@ -119,7 +120,6 @@ def init_db():
         )
     """)
 
-    # 旧バックアップDB復元時の全テーブル不足カラム・旧データ自動修復＆移行
     alter_and_migrate_sqls = [
         "ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN manual_stock INTEGER DEFAULT -1",
@@ -168,7 +168,6 @@ def init_db():
 
     conn.commit()
     conn.close()
-
 def get_setting(key: str, default: str = "") -> str:
     conn = get_db()
     row = conn.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
@@ -182,7 +181,7 @@ def set_setting(key: str, value: str):
     conn.close()
 
 def count_existing_generation_members(guild: discord.Guild) -> int:
-    """サーバー内に現在いる世代ロール所持者の実人数をカウント（再デプロイ後の逆戻り防止）"""
+    """サーバー内に現在いる世代ロール所持者の実人数をカウント"""
     gen_role_names = {name for _, name in GENERATION_TIERS}
     counted_users = set()
     for role in guild.roles:
@@ -191,6 +190,7 @@ def count_existing_generation_members(guild: discord.Guild) -> int:
                 if not member.bot and member.id != OWNER_ID:
                     counted_users.add(member.id)
     return len(counted_users)
+
 def ensure_user(user_id: int):
     conn = get_db()
     conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
@@ -258,7 +258,7 @@ async def refresh_champion_ranking(guild: discord.Guild):
     conn.close()
 
     old_champ_id = int(get_setting("current_champion_id", "0"))
-    new_champ_id = top_rows[0]["user_id"] if top_rows else 0
+    new_champ_id = next(iter(top_rows))["user_id"] if top_rows else 0
 
     champion_changed = False
     if new_champ_id != 0 and new_champ_id != old_champ_id:
@@ -375,13 +375,13 @@ def get_sold_stock_count(product_code: str) -> int:
     return row["cnt"] if row else 0
 
 def build_vending_embed(game_title: str) -> discord.Embed:
-    """自販機パネル用Embed作成（常に安い順＋現在のジャックポットプール額を表示）"""
+    """販売機パネル用Embed作成（常に安い順＋現在のジャックポットプール額を表示）"""
     products = get_products_sorted(game_title)
     jp_pool = int(get_setting("jackpot_pool", "0"))
     jp_rate = get_setting("jackpot_win_rate", "10")
 
     embed = discord.Embed(
-        title=f"🏪 {game_title} 24時間自動販売機",
+        title=f"🏪 {game_title} 24時間購入OK・半自動販売機",
         description=(
             "下のボタンから商品の購入・在庫確認・再入荷通知の設定ができます！\n"
             f"🎰 **現在のジャックポット蓄積額：`{jp_pool:,}円分クーポン`**（購入ごとに当選チャンス！当選率 `{jp_rate}%`）"
@@ -402,7 +402,7 @@ def build_vending_embed(game_title: str) -> discord.Embed:
                 inline=False
             )
 
-    embed.set_footer(text="Game.VM 自動販売機システム | 24時間即納対応")
+    embed.set_footer(text="Game.VM 半自動販売機システム | 24時間購入OK（確認後スピーディーに納品）")
     return embed
 
 async def notify_restock(bot_instance: commands.Bot, product_code: str, added_count: int):
@@ -424,7 +424,7 @@ async def notify_restock(bot_instance: commands.Bot, product_code: str, added_co
                     description=(
                         f"**【{prod['game_title']}】{prod['name']}** の在庫が **`{added_count}個`** 入荷しました！\n\n"
                         f"💰 **価格: {prod['price']:,}円**\n"
-                        "🛒 24時間いつでも自販機から即購入可能です！"
+                        "🛒 24時間いつでも半自動販売機から購入可能です（確認後スピーディーに納品）！"
                     ),
                     color=discord.Color.green()
                 )
@@ -445,13 +445,14 @@ async def notify_restock(bot_instance: commands.Bot, product_code: str, added_co
                         f"📦 **商品名**: {prod['name']}（コード: `{prod['code']}`）\n"
                         f"💰 **価格**: {prod['price']:,}円\n"
                         f"📈 **今回入荷数**: {added_count}個\n\n"
-                        "売り切れる前にぜひ自販機チャンネルからご購入ください！"
+                        "売り切れる前にぜひ販売機チャンネルからご購入ください！"
                     ),
                     color=discord.Color.green()
                 )
                 await user.send(embed=embed)
         except Exception:
             pass
+
 # ==========================================
 # 3. 購入フロー・決済承認・ジャックポット抽選UI
 # ==========================================
@@ -530,7 +531,7 @@ class PayPayLinkModal(discord.ui.Modal, title="💳 PayPay送金リンクの提�
             f"✅ **お支払い申請を受け付けました！**\n"
             f"📦 商品：**{self.product_name}** × `{self.quantity}個`\n"
             f"💰 お支払い金額：**`{final_total:,}円`**（クーポン：{coupon_info_text}）\n\n"
-            "オーナーがPayPayリンクを確認・承認次第、あなたのDMへアカウントデータが自動送信されます。しばらくお待ちください！",
+            "オーナーがPayPayリンクを確認・承認次第、あなたのDMへアカウントデータが送信されます。しばらくお待ちください！",
             ephemeral=True
         )
 
@@ -719,6 +720,7 @@ class OwnerApproveView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="**【却下処理完了】** 在庫を売り場に戻しました。", view=self)
+
 class QuantityModal(discord.ui.Modal, title="🔢 購入個数の入力"):
     qty_input = discord.ui.TextInput(
         label="購入する個数（半角数字）",
@@ -788,7 +790,6 @@ class QuantityModal(discord.ui.Modal, title="🔢 購入個数の入力"):
             view=view,
             ephemeral=True
         )
-
 class OpenPayPayModalView(discord.ui.View):
     def __init__(self, product_code: str, quantity: int, stock_ids: list[int], unit_price: int, product_name: str, game_title: str):
         super().__init__(timeout=900)
@@ -833,7 +834,7 @@ class ProductBuySelect(discord.ui.Select):
         super().__init__(placeholder="購入したい商品を選択してください（安い順）", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        code = self.values[0]
+        code = next(iter(self.values))
         avail = get_available_stock_count(code)
         if avail <= 0:
             await interaction.response.send_message("❌ この商品は現在売り切れです。「🔔 再入荷通知」ボタンから入荷通知を受け取れます！", ephemeral=True)
@@ -844,6 +845,7 @@ class ProductSelectView(discord.ui.View):
     def __init__(self, game_title: str, products: list):
         super().__init__(timeout=180)
         self.add_item(ProductBuySelect(game_title, products))
+
 class RestockAlertSelect(discord.ui.Select):
     def __init__(self, products: list):
         options = []
@@ -855,7 +857,7 @@ class RestockAlertSelect(discord.ui.Select):
         super().__init__(placeholder="再入荷通知を受け取る商品を選択（安い順）", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        code = self.values[0]
+        code = next(iter(self.values))
         conn = get_db()
         prod = conn.execute("SELECT name FROM products WHERE code = ?", (code,)).fetchone()
         existing = conn.execute(
@@ -893,8 +895,14 @@ class VendingMachineView(discord.ui.View):
         if self.game_title:
             return self.game_title
         if interaction.message and interaction.message.embeds:
-            title = interaction.message.embeds[0].title or ""
-            return title.replace("🏪 ", "").replace(" 24時間自動販売機", "").strip()
+            first_embed = next(iter(interaction.message.embeds))
+            title = first_embed.title or ""
+            return (
+                title.replace("🏪 ", "")
+                .replace(" 24時間購入OK・半自動販売機", "")
+                .replace(" 24時間自動販売機", "")
+                .strip()
+            )
         return ""
 
     @discord.ui.button(label="🛒 購入する", style=discord.ButtonStyle.success, custom_id="vm_buy_btn")
@@ -905,7 +913,7 @@ class VendingMachineView(discord.ui.View):
             return
 
         if get_setting("maintenance", "OFF") == "ON" and interaction.user.id != OWNER_ID:
-            await interaction.response.send_message("🔧 現在自販機システムはメンテナンス中です。再開まで今しばらくお待ちください。", ephemeral=True)
+            await interaction.response.send_message("🔧 現在販売機システムはメンテナンス中です。再開まで今しばらくお待ちください。", ephemeral=True)
             return
 
         g_title = self._extract_game_title(interaction)
@@ -968,7 +976,7 @@ async def analyze_stock_image_with_gemini(image_bytes: bytes, mime_type: str) ->
         return {"error": "Renderの環境変数に GEMINI_API_KEY が設定されていません。"}
 
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
-    url = f"https://googleapis.com{GEMINI_API_KEY}"
+    url = "https://googleapis.com" + GEMINI_API_KEY
 
     prompt = (
         "あなたはゲームアカウント仕入れ画像の解析AIです。添付された画像から以下を正確に読み取り、"
@@ -998,7 +1006,11 @@ async def analyze_stock_image_with_gemini(image_bytes: bytes, mime_type: str) ->
                     err_txt = await resp.text()
                     return {"error": f"AI解析APIエラー (HTTP {resp.status}): {err_txt[:150]}"}
                 data = await resp.json()
-                raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                candidates = data.get("candidates", [])
+                first_cand = next(iter(candidates), {})
+                parts = first_cand.get("content", {}).get("parts", [])
+                first_part = next(iter(parts), {})
+                raw_text = first_part.get("text", "").strip()
                 raw_text = re.sub(r"^```json\s*|\s*```$", "", raw_text, flags=re.MULTILINE).strip()
                 parsed = json.loads(raw_text)
                 return parsed
@@ -1049,7 +1061,7 @@ class OcrConfirmView(discord.ui.View):
         await interaction.response.edit_message(
             content=(
                 f"🎉 **【{mode_str} 完了！】**\n"
-                f"・自販機タイトル：**{self.game_title}**\n"
+                f"・販売機タイトル：**{self.game_title}**\n"
                 f"・商品コード：`{self.product_code}`\n"
                 f"・商品名：**{self.product_name}**（`{self.price:,}円`）\n"
                 f"・登録完了在庫数：**`{len(self.accounts)}個`**（再入荷通知も自動送信済み）"
@@ -1062,6 +1074,7 @@ class OcrConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="❌ スクショ登録をキャンセルしました。", view=self)
+
 # ==========================================
 # 5. 【神機能②・③・④】/admin 社長司令室ダッシュボード
 # ==========================================
@@ -1117,7 +1130,6 @@ class JackpotConfigModal(discord.ui.Modal, title="🎰 ジャックポット設�
             f"・当選確率：**`{rate}%`**",
             ephemeral=True
         )
-
 class AdminControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
@@ -1178,129 +1190,6 @@ class AdminControlView(discord.ui.View):
         )
         await interaction.response.send_message("✅ 最新のデータベースファイルをDMに送信しました！", ephemeral=True)
 # ==========================================
-# 6. 運営対応状況・チケット・オーダー受付パネルUI
-# ==========================================
-class StatusPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _update_status(self, interaction: discord.Interaction, label: str, desc: str, color: discord.Color):
-        if interaction.user.id != OWNER_ID:
-            await interaction.response.send_message("❌ オーナーのみ変更可能です。", ephemeral=True)
-            return
-        embed = discord.Embed(
-            title="📡 運営リアルタイム対応状況",
-            description=f"現在のステータス：**{label}**\n\n{desc}",
-            color=color,
-            timestamp=datetime.now(JST)
-        )
-        embed.set_footer(text="ボタン操作でリアルタイム更新されます（運営専用）")
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @discord.ui.button(label="🟢 対応可能", style=discord.ButtonStyle.success, custom_id="status_online")
-    async def btn_online(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._update_status(interaction, "🟢 対応可能（即対応中）", "現在オンラインです！購入承認・チケット返信ともに最速で対応いたします。", discord.Color.green())
-
-    @discord.ui.button(label="🟡 遅延あり", style=discord.ButtonStyle.primary, custom_id="status_away")
-    async def btn_away(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._update_status(interaction, "🟡 遅延あり（順次対応）", "現在作業中または外出中のため、返信・承認まで少しお時間をいただく場合があります。", discord.Color.gold())
-
-    @discord.ui.button(label="🔴 対応不可", style=discord.ButtonStyle.danger, custom_id="status_offline")
-    async def btn_offline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._update_status(interaction, "🔴 対応不可（離席・就寝中）", "現在離席・就寝中のため対応できません。戻りましたら順番に対応いたします！", discord.Color.red())
-
-class CloseTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🔒 チケットを閉じる（削除）", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("🔒 5秒後にこのチケットチャンネルを削除します...")
-        await discord.utils.sleep_until(datetime.now(timezone.utc) + timedelta(seconds=5))
-        try:
-            await interaction.channel.delete(reason="チケット完了・クローズ")
-        except Exception:
-            pass
-
-class TicketPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🎫 問い合わせチケットを発行", style=discord.ButtonStyle.primary, custom_id="ticket_create_btn")
-    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        banned, reason = is_user_banned(interaction.user.id)
-        if banned:
-            await interaction.response.send_message(f"🚫 ブラックリスト登録済みのため発行できません（理由: {reason}）。", ephemeral=True)
-            return
-
-        guild = interaction.guild
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
-        }
-        owner_member = guild.get_member(OWNER_ID)
-        if owner_member:
-            overwrites[owner_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
-
-        ch_name = f"ticket-{interaction.user.name}"[:30]
-        ch = await guild.create_text_channel(name=ch_name, category=interaction.channel.category, overwrites=overwrites)
-        embed = discord.Embed(
-            title="🎫 お問い合わせ専用チケット",
-            description=(
-                f"{interaction.user.mention} 様、お問い合わせありがとうございます！\n"
-                "ご用件（購入トラブル・ご質問・Xフォロー特典のスクショ提出など）をこちらにご記入ください。\n"
-                "対応が完了しましたら下のボタンからチャンネルを閉じることができます。"
-            ),
-            color=discord.Color.blurple()
-        )
-        await ch.send(content=f"{interaction.user.mention} <@{OWNER_ID}>", embed=embed, view=CloseTicketView())
-        await interaction.response.send_message(f"✅ 専用チケットを作成しました！ → {ch.mention}", ephemeral=True)
-
-class OrderRequestModal(discord.ui.Modal, title="🎯 キャラ指定・オーダー依頼フォーム"):
-    game_name = discord.ui.TextInput(label="ゲームタイトル（例：バウンティ / ぷにぷに）", required=True, max_length=50)
-    desired_spec = discord.ui.TextInput(label="希望キャラ・石数・ランクなどの条件", style=discord.TextStyle.paragraph, required=True, max_length=400)
-    budget = discord.ui.TextInput(label="ご予算（例：3,000円〜5,000円）", required=True, max_length=50)
-    os_type = discord.ui.TextInput(label="端末OS（iOS / Android）", required=True, max_length=30)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
-            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
-        }
-        owner_member = guild.get_member(OWNER_ID)
-        if owner_member:
-            overwrites[owner_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
-
-        ch_name = f"order-{interaction.user.name}"[:30]
-        ch = await guild.create_text_channel(name=ch_name, category=interaction.channel.category, overwrites=overwrites)
-        embed = discord.Embed(
-            title="🎯 オーダー・キャラ指定依頼シート",
-            color=discord.Color.purple()
-        )
-        embed.add_field(name="依頼者", value=interaction.user.mention, inline=True)
-        embed.add_field(name="ゲームタイトル", value=self.game_name.value, inline=True)
-        embed.add_field(name="端末OS", value=self.os_type.value, inline=True)
-        embed.add_field(name="ご予算", value=self.budget.value, inline=True)
-        embed.add_field(name="ご希望の条件・詳細", value=self.desired_spec.value, inline=False)
-
-        await ch.send(content=f"{interaction.user.mention} <@{OWNER_ID}>", embed=embed, view=CloseTicketView())
-        await interaction.response.send_message(f"✅ オーダー専用チャンネルを作成しました！ → {ch.mention}", ephemeral=True)
-
-class OrderPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🎯 キャラ指定・オーダーを依頼する", style=discord.ButtonStyle.success, custom_id="order_create_btn")
-    async def open_order(self, interaction: discord.Interaction, button: discord.ui.Button):
-        banned, reason = is_user_banned(interaction.user.id)
-        if banned:
-            await interaction.response.send_message(f"🚫 ブラックリスト登録済みのため利用できません（理由: {reason}）。", ephemeral=True)
-            return
-        await interaction.response.send_modal(OrderRequestModal())
-# ==========================================
 # 7. プレゼント企画（Giveaway）UI ＆ Bot初期化
 # ==========================================
 class GiveawayView(discord.ui.View):
@@ -1327,7 +1216,7 @@ class GiveawayView(discord.ui.View):
 
         try:
             if interaction.message and interaction.message.embeds:
-                emb = interaction.message.embeds
+                emb = next(iter(interaction.message.embeds))
                 emb.set_field_at(1, name="現在の参加者数", value=f"**`{len(self.participants)}名`**", inline=True)
                 await interaction.message.edit(embed=emb, view=self)
         except Exception:
@@ -1359,8 +1248,9 @@ bot = VendingBot()
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
 # ==========================================
-# 8. メンバー入店時世代ロール自動付与 ＆ 定期監視ループ
+# 8. メンバー入店時世代ロール＆名前横バッジ自動付与
 # ==========================================
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -1370,19 +1260,16 @@ async def on_member_join(member: discord.Member):
     ensure_user(member.id)
     guild = member.guild
 
+    # 最古参・古参の枠はすでに埋まっているため、新規入店者は絶対に第一世代からスタートする
     conn = get_db()
     existing = conn.execute("SELECT gen_number, gen_role FROM member_generations WHERE user_id = ?", (member.id,)).fetchone()
-    if existing:
+    if existing and existing["gen_role"] not in ("最古参☠️", "古参🎮"):
         gen_num = existing["gen_number"]
         role_name = existing["gen_role"]
     else:
         current_count = count_existing_generation_members(guild)
-        gen_num = current_count + 1
-        role_name = "第二世代"
-        for limit_num, r_name in GENERATION_TIERS:
-            if gen_num <= limit_num:
-                role_name = r_name
-                break
+        gen_num = max(16, current_count + 1)
+        role_name = "第一世代" if gen_num <= 315 else "第二世代"
 
         now_str = datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S")
         conn.execute(
@@ -1392,10 +1279,15 @@ async def on_member_join(member: discord.Member):
         conn.commit()
     conn.close()
 
+    # 1. 世代ロールの付与（別表示 hoist=True 対応）
     target_role = discord.utils.get(guild.roles, name=role_name)
     if not target_role:
         try:
-            target_role = await guild.create_role(name=role_name, colour=discord.Colour.teal())
+            target_role = await guild.create_role(
+                name=role_name,
+                colour=discord.Colour.teal(),
+                hoist=True
+            )
         except Exception:
             target_role = None
 
@@ -1405,6 +1297,15 @@ async def on_member_join(member: discord.Member):
         except Exception:
             pass
 
+    # 2. 名前の横に世代バッジを自動付与（新規入店メンバーのみ）
+    badge_prefix = f"【{role_name}】"
+    try:
+        base_name = member.display_name
+        if not base_name.startswith(badge_prefix):
+            new_nick = f"{badge_prefix}{base_name}"[:32]
+            await member.edit(nick=new_nick)
+    except Exception:
+        pass
 @tasks.loop(minutes=10)
 async def watch_hunter_loop():
     """【神機能②】24時間眠らない仕入れ先・相場自動監視ハンター定期巡回"""
@@ -1480,6 +1381,7 @@ async def watch_hunter_loop():
                 conn2.execute("UPDATE watch_targets SET last_status = ? WHERE id = ?", (f"接続エラー: {str(e)[:40]}", tid))
                 conn2.commit()
                 conn2.close()
+
 # ==========================================
 # 9. スラッシュコマンド群（神機能・司令室・OCR・強化版復元）
 # ==========================================
@@ -1530,12 +1432,11 @@ async def cmd_admin(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed, view=AdminControlView(), ephemeral=True)
-
 @bot.tree.command(name="ocr_stock", description="【オーナー専用】仕入れスクショを1枚送るだけで商品登録＆在庫一括追加")
 @app_commands.describe(
     image="仕入れ先アカウント一覧のスクリーンショット画像",
     product_code="既存商品コード（新規作成する場合は新しいコードを入力 例: p101）",
-    game_title="新規作成時の自販機タイトル（例: バウンティ / ぷにぷに）※既存追加時は空欄OK",
+    game_title="新規作成時の販売機タイトル（例: バウンティ / ぷにぷに）※既存追加時は空欄OK",
     price="新規作成時の販売価格（円）※既存追加時は空欄OK",
     custom_name="商品名を手動指定したい場合のみ入力（空欄なら画像からAIが自動命名）"
 )
@@ -1565,7 +1466,7 @@ async def cmd_ocr_stock(
     is_new = existing_prod is None
     if is_new and (not game_title.strip() or price <= 0):
         await interaction.followup.send(
-            f"❌ 商品コード `{code}` は未登録の新規商品です。\n新規作成する場合は `game_title`（自販機名）と `price`（販売価格）も一緒に入力してください！",
+            f"❌ 商品コード `{code}` は未登録の新規商品です。\n新規作成する場合は `game_title`（販売機名）と `price`（販売価格）も一緒に入力してください！",
             ephemeral=True
         )
         return
@@ -1595,7 +1496,7 @@ async def cmd_ocr_stock(
     embed = discord.Embed(
         title=f"📸 スクショAI読み取り完了（{mode_label}）",
         description=(
-            f"・自販機タイトル：**{final_game}**\n"
+            f"・販売機タイトル：**{final_game}**\n"
             f"・商品コード：`{code}`\n"
             f"・商品名：**{final_name}**（`{final_price:,}円`）\n"
             f"・検出アカウント数：**`{len(accounts)}件`**\n\n"
@@ -1605,6 +1506,7 @@ async def cmd_ocr_stock(
     )
     view = OcrConfirmView(code, final_game, final_name, final_price, "", accounts, is_new)
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
 @bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付して全データ＋ランク＋世代を1秒で完全復元")
 @app_commands.describe(db_file="バックアップした vending_backup_xxxx.db ファイル")
 async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Attachment):
@@ -1621,10 +1523,8 @@ async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Atta
     with open(DB_PATH, "wb") as f:
         f.write(raw_bytes)
 
-    # 1. 全テーブルの不足カラム・旧データを自動補完＆移行
     init_db()
 
-    # 2. サーバー内の既存世代ロール所持者を自動同期
     guild = interaction.guild
     gen_synced = 0
     if guild:
@@ -1647,7 +1547,6 @@ async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Atta
         conn_g.commit()
         conn_g.close()
 
-    # 3. 全購入者のVIPランク＆課金番付（覇者バッジ）を自動再計算
     conn = get_db()
     buyers = conn.execute("SELECT user_id FROM users WHERE user_id != ? AND total_spent > 0", (OWNER_ID,)).fetchall()
     prod_cnt = conn.execute("SELECT COUNT(*) AS c FROM products").fetchone()["c"]
@@ -1668,7 +1567,6 @@ async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Atta
         f"・世代同期完了：**`{gen_synced}名`** / VIPランク同期：**`{len(buyers)}名`**",
         ephemeral=True
     )
-
 @bot.tree.command(name="backup_db", description="【オーナー専用】現在のデータベースファイル(.db)を手動でDMへバックアップ送信")
 async def cmd_backup_db(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
@@ -1701,10 +1599,10 @@ async def cmd_remove_watch(interaction: discord.Interaction, watch_id: int):
         await interaction.response.send_message(f"❌ 監視ID `{watch_id}` は見つかりませんでした。", ephemeral=True)
 
 # ==========================================
-# 10. 自販機設置 ＆ 商品管理コマンド（安い順対応）
+# 10. 販売機設置 ＆ 商品管理コマンド（安い順対応）
 # ==========================================
-@bot.tree.command(name="add_vending", description="【オーナー専用】このチャンネルに24時間自動販売機パネルを設置")
-@app_commands.describe(game_title="表示するゲーム・自販機タイトル（例：バウンティ / ぷにぷに）")
+@bot.tree.command(name="add_vending", description="【オーナー専用】このチャンネルに24時間購入OK・半自動販売機パネルを設置")
+@app_commands.describe(game_title="表示するゲーム・販売機タイトル（例：バウンティ / ぷにぷに）")
 async def cmd_add_vending(interaction: discord.Interaction, game_title: str):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
@@ -1713,12 +1611,12 @@ async def cmd_add_vending(interaction: discord.Interaction, game_title: str):
     embed = build_vending_embed(g_title)
     view = VendingMachineView(g_title)
     await interaction.channel.send(embed=embed, view=view)
-    await interaction.response.send_message(f"✅ **{g_title}** の自動販売機パネル（安い順表示）を設置しました！", ephemeral=True)
+    await interaction.response.send_message(f"✅ **{g_title}** の半自動販売機パネル（安い順表示）を設置しました！", ephemeral=True)
 
 @bot.tree.command(name="add_product", description="【オーナー専用】新しい商品を登録")
 @app_commands.describe(
     code="商品コード（半角英数字 例: b1）",
-    game_title="紐づける自販機タイトル（例: バウンティ）",
+    game_title="紐づける販売機タイトル（例: バウンティ）",
     name="商品名（例: 【iOS】ダイヤ5200個垢）",
     price="販売価格（円・半角数字）",
     description="商品の説明文（任意）",
@@ -1749,10 +1647,9 @@ async def cmd_add_product(
         return
     conn.close()
     await interaction.response.send_message(
-        f"✅ 商品を登録しました！（自動的に安い順へ並び替えられます）\n・コード：`{code}` / 自販機：**{game_title}** / 商品名：**{name}**（`{price:,}円`）",
+        f"✅ 商品を登録しました！（自動的に安い順へ並び替えられます）\n・コード：`{code}` / 販売機：**{game_title}** / 商品名：**{name}**（`{price:,}円`）",
         ephemeral=True
     )
-
 @bot.tree.command(name="edit_product", description="【オーナー専用】登録済み商品の価格・名前・説明・手動在庫を変更")
 @app_commands.describe(
     code="編集したい商品コード",
@@ -1827,6 +1724,7 @@ async def cmd_list_products(interaction: discord.Interaction):
         lines.append(f"・`【{p['code']}】` [{p['game_title']}] **{p['name']}** — **`{p['price']:,}円`**（在庫: `{avail}個` / 販売済: `{sold}個`）")
     embed = discord.Embed(title="📋 登録全商品一覧（安い順）", description="\n".join(lines)[:4000], color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ==========================================
 # 11. 在庫補充・削除・キープ解除・機密販売ログコマンド
 # ==========================================
@@ -1849,7 +1747,6 @@ async def cmd_add_stock(interaction: discord.Interaction, product_code: str, acc
 
     await notify_restock(interaction.client, code, 1)
     await interaction.response.send_message(f"✅ **【{code}】{prod['name']}** に在庫を `1件` 追加しました（入荷通知送信済み）。", ephemeral=True)
-
 @bot.tree.command(name="bulk_add_stock", description="【オーナー専用】スラッシュ(/)区切りで複数アカウント在庫を一括追加")
 @app_commands.describe(product_code="商品コード", items_separated_by_slash="スラッシュ / で区切った複数アカウント情報")
 async def cmd_bulk_add_stock(interaction: discord.Interaction, product_code: str, items_separated_by_slash: str):
@@ -1927,6 +1824,7 @@ async def cmd_secret_sales_log(interaction: discord.Interaction):
         )
     embed = discord.Embed(title="🔐 直近の機密販売ログ（最新15件）", description="\n".join(lines)[:4000], color=discord.Color.dark_red())
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ==========================================
 # 12. クーポン・実績・売上レポート・メンテ切替コマンド
 # ==========================================
@@ -1966,7 +1864,7 @@ async def cmd_create_coupon(
                     f"いつもご利用ありがとうございます！運営より特別クーポンをお送りいたします。\n\n"
                     f"🔑 **クーポンコード**: `{c_code}`\n"
                     f"🎁 **割引内容**: **{disc_label}**（有効回数: `{max_uses}回`）\n\n"
-                    "自販機でPayPayリンクを提出する際のクーポン欄に入力してご利用ください！"
+                    "販売機でPayPayリンクを提出する際のクーポン欄に入力してご利用ください！"
                 ),
                 color=discord.Color.gold()
             )
@@ -1979,7 +1877,6 @@ async def cmd_create_coupon(
         f"✅ クーポン **`{c_code}`**（{disc_label} / 上限 `{max_uses}回`）を発行しました！{dm_note}",
         ephemeral=True
     )
-
 @bot.tree.command(name="list_coupons", description="【オーナー専用】発行済みの有効クーポン一覧を表示")
 async def cmd_list_coupons(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
@@ -2045,7 +1942,7 @@ async def cmd_sales_report(interaction: discord.Interaction):
     embed = discord.Embed(title="📈 ショップ売上・販売実績レポート（安い順）", description="\n".join(lines)[:4000], color=discord.Color.green())
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="maintenance", description="【オーナー専用】自販機のメンテナンスモード ON / OFF を切り替え")
+@bot.tree.command(name="maintenance", description="【オーナー専用】販売機のメンテナンスモード ON / OFF を切り替え")
 @app_commands.describe(mode="ON で購入停止、OFF で通常営業")
 @app_commands.choices(mode=[
     app_commands.Choice(name="ON（メンテナンス開始）", value="ON"),
@@ -2057,6 +1954,7 @@ async def cmd_maintenance(interaction: discord.Interaction, mode: app_commands.C
         return
     set_setting("maintenance", mode.value)
     await interaction.response.send_message(f"🔧 メンテナンスモードを **`{mode.value}`** に切り替えました！", ephemeral=True)
+
 # ==========================================
 # 13. ブラックリスト・特別称号・DM送信・アナウンスコマンド
 # ==========================================
@@ -2072,7 +1970,6 @@ async def cmd_ban_user(interaction: discord.Interaction, user: discord.Member, r
     conn.commit()
     conn.close()
     await interaction.response.send_message(f"🚫 {user.mention} 様をブラックリストに登録しました（理由: `{reason}`）。", ephemeral=True)
-
 @bot.tree.command(name="unban_user", description="【オーナー専用】指定ユーザーのブラックリストを解除")
 @app_commands.describe(user="解除するユーザー")
 async def cmd_unban_user(interaction: discord.Interaction, user: discord.Member):
@@ -2153,6 +2050,7 @@ async def cmd_announce(interaction: discord.Interaction, title: str, message: st
     embed.set_footer(text="Game.VM 公式アナウンス")
     await interaction.channel.send(embed=embed)
     await interaction.response.send_message("✅ お知らせを投稿しました！", ephemeral=True)
+
 # ==========================================
 # 14. 各種パネル設置 ＆ プレゼント企画コマンド
 # ==========================================
@@ -2170,7 +2068,6 @@ async def cmd_add_status_panel(interaction: discord.Interaction):
     embed.set_footer(text="ボタン操作でリアルタイム更新されます（運営専用）")
     await interaction.channel.send(embed=embed, view=StatusPanelView())
     await interaction.response.send_message("✅ 対応状況パネルを設置しました！", ephemeral=True)
-
 @bot.tree.command(name="add_ticket", description="【オーナー専用】このチャンネルにお問い合わせチケット発行パネルを設置")
 async def cmd_add_ticket(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
@@ -2195,7 +2092,7 @@ async def cmd_add_order_panel(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🎯 キャラ指定・オーダー依頼受付",
         description=(
-            "自販機に並んでいないアカウントや、特定の強キャラ・石数指定のご依頼も受け付けております！\n"
+            "販売機に並んでいないアカウントや、特定の強キャラ・石数指定のご依頼も受け付けております！\n"
             "下のボタンを押してご希望の条件をご入力ください。"
         ),
         color=discord.Color.purple()
@@ -2222,7 +2119,7 @@ async def cmd_giveaway(interaction: discord.Interaction, prize: str, winners_cou
 
     embed = discord.Embed(
         title="🎁 豪華無料プレゼント企画開催中！！",
-        description=f"下の **「🎉 プレゼント企画に参加する！」** ボタンを押すだけでエントリー完了！\n終了時刻になるとBotが完全ランダムで自動抽選します！",
+        description="下の **「🎉 プレゼント企画に参加する！」** ボタンを押すだけでエントリー完了！\n終了時刻になるとBotが完全ランダムで自動抽選します！",
         color=discord.Color.magenta()
     )
     embed.add_field(name="🏆 プレゼント景品", value=f"**{prize}**", inline=False)
@@ -2321,7 +2218,7 @@ async def cmd_profile(interaction: discord.Interaction, user: discord.Member = N
     embed.add_field(name="💰 累計ご購入金額", value=f"**`{total_spent:,}円`**", inline=True)
     embed.add_field(name="🎖️ 特別称号・認定ロール", value=f"`{special_title}`", inline=True)
     embed.add_field(name="📈 ランクアップ進捗", value=next_rank_text, inline=False)
-    embed.set_footer(text="Game.VM 24時間自動販売機システム")
+    embed.set_footer(text="Game.VM 半自動販売機システム")
 
     await interaction.response.send_message(embed=embed)
 
@@ -2349,10 +2246,11 @@ async def cmd_ranking(interaction: discord.Interaction):
         embed.add_field(name="現在のトップランカー", value="\n".join(lines), inline=False)
 
     await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="help", description="利用できる全コマンド一覧と使い方ガイドを表示")
 async def cmd_help(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="📖 Game.VM 自動販売機Bot コマンド一覧",
+        title="📖 Game.VM 販売機Bot コマンド一覧",
         description="このBotで利用できる主なスラッシュコマンドの一覧です。",
         color=discord.Color.blurple()
     )
@@ -2380,7 +2278,7 @@ async def cmd_help(interaction: discord.Interaction):
             inline=False
         )
         embed.add_field(
-            name="🏪 自販機・商品・在庫・運営管理コマンド",
+            name="🏪 販売機・商品・在庫・運営管理コマンド",
             value=(
                 "・`/add_vending` / `/add_product` / `/edit_product` / `/delete_product` / `/list_products`\n"
                 "・`/add_stock` / `/bulk_add_stock` / `/clear_stock` / `/release_keep` / `/secret_sales_log`\n"
@@ -2391,7 +2289,6 @@ async def cmd_help(interaction: discord.Interaction):
             inline=False
         )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 @bot.tree.command(name="sync_generations", description="【オーナー専用】現在サーバーにいるメンバーの世代ロールをDBへ安全同期")
 async def cmd_sync_generations(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
@@ -2426,6 +2323,7 @@ async def cmd_sync_generations(interaction: discord.Interaction):
         f"（現在の世代カウント：`{total_now}名` → 次の新規入店者は **`{total_now + 1}人目`** として付与されます）",
         ephemeral=True
     )
+
 # ==========================================
 # 16. グローバルエラーハンドリング（Bot強制終了防止）
 # ==========================================
@@ -2446,6 +2344,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.response.send_message(msg, ephemeral=True)
     except Exception:
         pass
+
 # ==========================================
 # 17. 復元直後用・全メンバーVIPランク＆覇者バッジ再同期コマンド
 # ==========================================
