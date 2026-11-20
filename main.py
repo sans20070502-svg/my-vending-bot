@@ -976,7 +976,7 @@ async def analyze_stock_image_with_gemini(image_bytes: bytes, mime_type: str) ->
         return {"error": "Renderの環境変数に GEMINI_API_KEY が設定されていません。"}
 
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
-    url = "https://googleapis.com" + GEMINI_API_KEY
+        url = "https://generativelanguage.googleapis." + "com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
 
     prompt = (
         "あなたはゲームアカウント仕入れ画像の解析AIです。添付された画像から以下を正確に読み取り、"
