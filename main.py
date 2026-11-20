@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 TOKEN = os.getenv("DISCORD_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+HEARTBEAT_CHANNEL_ID = int(os.getenv("HEARTBEAT_CHANNEL_ID", os.getenv("ADMIN_CHANNEL_ID", "0")))
 DB_PATH = "vending.db"
 
 JST = timezone(timedelta(hours=9))
@@ -168,6 +169,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+
 def get_setting(key: str, default: str = "") -> str:
     conn = get_db()
     row = conn.execute("SELECT value FROM system_settings WHERE key = ?", (key,)).fetchone()
@@ -205,7 +207,6 @@ def is_user_banned(user_id: int) -> tuple[bool, str]:
     if row and row["is_banned"] == 1:
         return True, row["ban_reason"] or "規約違反"
     return False, ""
-
 async def update_vip_rank_and_champion(guild: discord.Guild, user_id: int, added_amount: int):
     """累計購入金額の加算・VIPランク自動昇格・下剋上課金番付＆覇者バッジ強奪処理"""
     ensure_user(user_id)
@@ -282,7 +283,6 @@ async def refresh_champion_ranking(guild: discord.Guild):
                 await new_member.edit(nick=new_nick)
             except Exception:
                 pass
-
     ch_id = int(get_setting("ranking_channel_id", "0"))
     msg_id = int(get_setting("ranking_message_id", "0"))
     if ch_id != 0:
@@ -334,6 +334,7 @@ async def refresh_champion_ranking(guild: discord.Guild):
                         )
                 except Exception:
                     pass
+
 def get_products_sorted(game_title: str = None):
     """全商品を安い順（price ASC）で取得する共通関数"""
     conn = get_db()
@@ -404,7 +405,6 @@ def build_vending_embed(game_title: str) -> discord.Embed:
 
     embed.set_footer(text="Game.VM 半自動販売機システム | 24時間購入OK（確認後スピーディーに納品）")
     return embed
-
 async def notify_restock(bot_instance: commands.Bot, product_code: str, added_count: int):
     """#在庫通知チャンネルへの商品入荷速報投稿 ＆ 個別通知登録者への自動DM送信"""
     conn = get_db()
@@ -720,7 +720,6 @@ class OwnerApproveView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="**【却下処理完了】** 在庫を売り場に戻しました。", view=self)
-
 class QuantityModal(discord.ui.Modal, title="🔢 購入個数の入力"):
     qty_input = discord.ui.TextInput(
         label="購入する個数（半角数字）",
@@ -790,6 +789,7 @@ class QuantityModal(discord.ui.Modal, title="🔢 購入個数の入力"):
             view=view,
             ephemeral=True
         )
+
 class OpenPayPayModalView(discord.ui.View):
     def __init__(self, product_code: str, quantity: int, stock_ids: list[int], unit_price: int, product_name: str, game_title: str):
         super().__init__(timeout=900)
@@ -845,7 +845,6 @@ class ProductSelectView(discord.ui.View):
     def __init__(self, game_title: str, products: list):
         super().__init__(timeout=180)
         self.add_item(ProductBuySelect(game_title, products))
-
 class RestockAlertSelect(discord.ui.Select):
     def __init__(self, products: list):
         options = []
@@ -976,7 +975,7 @@ async def analyze_stock_image_with_gemini(image_bytes: bytes, mime_type: str) ->
         return {"error": "Renderの環境変数に GEMINI_API_KEY が設定されていません。"}
 
     b64_data = base64.b64encode(image_bytes).decode("utf-8")
-        url = "https://generativelanguage.googleapis." + "com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
+    url = "https://generativelanguage.googleapis." + "com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
 
     prompt = (
         "あなたはゲームアカウント仕入れ画像の解析AIです。添付された画像から以下を正確に読み取り、"
@@ -1074,7 +1073,6 @@ class OcrConfirmView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(content="❌ スクショ登録をキャンセルしました。", view=self)
-
 # ==========================================
 # 5. 【神機能②・③・④】/admin 社長司令室ダッシュボード
 # ==========================================
@@ -1130,6 +1128,7 @@ class JackpotConfigModal(discord.ui.Modal, title="🎰 ジャックポット設�
             f"・当選確率：**`{rate}%`**",
             ephemeral=True
         )
+
 class AdminControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=300)
@@ -1190,7 +1189,130 @@ class AdminControlView(discord.ui.View):
         )
         await interaction.response.send_message("✅ 最新のデータベースファイルをDMに送信しました！", ephemeral=True)
 # ==========================================
-# 7. プレゼント企画（Giveaway）UI ＆ Bot初期化
+# 6. 運営対応状況・チケット・オーダー受付パネルUI
+# ==========================================
+class StatusPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def _update_status(self, interaction: discord.Interaction, label: str, desc: str, color: discord.Color):
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("❌ オーナーのみ変更可能です。", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="📡 運営リアルタイム対応状況",
+            description=f"現在のステータス：**{label}**\n\n{desc}",
+            color=color,
+            timestamp=datetime.now(JST)
+        )
+        embed.set_footer(text="ボタン操作でリアルタイム更新されます（運営専用）")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="🟢 対応可能", style=discord.ButtonStyle.success, custom_id="status_online")
+    async def btn_online(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._update_status(interaction, "🟢 対応可能（即対応中）", "現在オンラインです！購入承認・チケット返信ともに最速で対応いたします。", discord.Color.green())
+
+    @discord.ui.button(label="🟡 遅延あり", style=discord.ButtonStyle.primary, custom_id="status_away")
+    async def btn_away(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._update_status(interaction, "🟡 遅延あり（順次対応）", "現在作業中または外出中のため、返信・承認まで少しお時間をいただく場合があります。", discord.Color.gold())
+
+    @discord.ui.button(label="🔴 対応不可", style=discord.ButtonStyle.danger, custom_id="status_offline")
+    async def btn_offline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._update_status(interaction, "🔴 対応不可（離席・就寝中）", "現在離席・就寝中のため対応できません。戻りましたら順番に対応いたします！", discord.Color.red())
+
+class CloseTicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 チケットを閉じる（削除）", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔒 5秒後にこのチケットチャンネルを削除します...")
+        await discord.utils.sleep_until(datetime.now(timezone.utc) + timedelta(seconds=5))
+        try:
+            await interaction.channel.delete(reason="チケット完了・クローズ")
+        except Exception:
+            pass
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎫 問い合わせチケットを発行", style=discord.ButtonStyle.primary, custom_id="ticket_create_btn")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        banned, reason = is_user_banned(interaction.user.id)
+        if banned:
+            await interaction.response.send_message(f"🚫 ブラックリスト登録済みのため発行できません（理由: {reason}）。", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+        owner_member = guild.get_member(OWNER_ID)
+        if owner_member:
+            overwrites[owner_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
+
+        ch_name = f"ticket-{interaction.user.name}"[:30]
+        ch = await guild.create_text_channel(name=ch_name, category=interaction.channel.category, overwrites=overwrites)
+        embed = discord.Embed(
+            title="🎫 お問い合わせ専用チケット",
+            description=(
+                f"{interaction.user.mention} 様、お問い合わせありがとうございます！\n"
+                "ご用件（購入トラブル・ご質問・Xフォロー特典のスクショ提出など）をこちらにご記入ください。\n"
+                "対応が完了しましたら下のボタンからチャンネルを閉じることができます。"
+            ),
+            color=discord.Color.blurple()
+        )
+        await ch.send(content=f"{interaction.user.mention} <@{OWNER_ID}>", embed=embed, view=CloseTicketView())
+        await interaction.response.send_message(f"✅ 専用チケットを作成しました！ → {ch.mention}", ephemeral=True)
+
+class OrderRequestModal(discord.ui.Modal, title="🎯 キャラ指定・オーダー依頼フォーム"):
+    game_name = discord.ui.TextInput(label="ゲームタイトル（例：バウンティ / ぷにぷに）", required=True, max_length=50)
+    desired_spec = discord.ui.TextInput(label="希望キャラ・石数・ランクなどの条件", style=discord.TextStyle.paragraph, required=True, max_length=400)
+    budget = discord.ui.TextInput(label="ご予算（例：3,000円〜5,000円）", required=True, max_length=50)
+    os_type = discord.ui.TextInput(label="端末OS（iOS / Android）", required=True, max_length=30)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+        owner_member = guild.get_member(OWNER_ID)
+        if owner_member:
+            overwrites[owner_member] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
+
+        ch_name = f"order-{interaction.user.name}"[:30]
+        ch = await guild.create_text_channel(name=ch_name, category=interaction.channel.category, overwrites=overwrites)
+        embed = discord.Embed(
+            title="🎯 オーダー・キャラ指定依頼シート",
+            color=discord.Color.purple()
+        )
+        embed.add_field(name="依頼者", value=interaction.user.mention, inline=True)
+        embed.add_field(name="ゲームタイトル", value=self.game_name.value, inline=True)
+        embed.add_field(name="端末OS", value=self.os_type.value, inline=True)
+        embed.add_field(name="ご予算", value=self.budget.value, inline=True)
+        embed.add_field(name="ご希望の条件・詳細", value=self.desired_spec.value, inline=False)
+
+        await ch.send(content=f"{interaction.user.mention} <@{OWNER_ID}>", embed=embed, view=CloseTicketView())
+        await interaction.response.send_message(f"✅ オーダー専用チャンネルを作成しました！ → {ch.mention}", ephemeral=True)
+
+class OrderPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎯 キャラ指定・オーダーを依頼する", style=discord.ButtonStyle.success, custom_id="order_create_btn")
+    async def open_order(self, interaction: discord.Interaction, button: discord.ui.Button):
+        banned, reason = is_user_banned(interaction.user.id)
+        if banned:
+            await interaction.response.send_message(f"🚫 ブラックリスト登録済みのため利用できません（理由: {reason}）。", ephemeral=True)
+            return
+        await interaction.response.send_modal(OrderRequestModal())
+# ==========================================
+# 7. プレゼント企画（Giveaway）UI ＆ 心臓マッサージ ＆ Bot初期化
 # ==========================================
 class GiveawayView(discord.ui.View):
     def __init__(self, prize: str, winners_count: int, end_timestamp: int):
@@ -1223,6 +1345,19 @@ class GiveawayView(discord.ui.View):
             pass
         await interaction.response.send_message(msg, ephemeral=True)
 
+@tasks.loop(minutes=1)
+async def heartbeat_loop():
+    """1分おきにオーナーDMへ送信して即削除する心臓マッサージ機能"""
+    if OWNER_ID == 0:
+        return
+    try:
+        owner = await bot.fetch_user(OWNER_ID)
+        if owner:
+            msg = await owner.send("💓")
+            await msg.delete()
+    except Exception:
+        pass
+
 class VendingBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -1238,6 +1373,8 @@ class VendingBot(commands.Bot):
         self.add_view(OrderPanelView())
         self.add_view(CloseTicketView())
 
+        if not heartbeat_loop.is_running():
+            heartbeat_loop.start()
         if not watch_hunter_loop.is_running():
             watch_hunter_loop.start()
 
