@@ -2511,23 +2511,14 @@ async def cmd_recalc_ranks(interaction: discord.Interaction):
         ephemeral=True
     )
 # ==========================================
-# 18. 1分おき心臓マッサージ（チャンネル無音送信＆HTTP維持）＆ Bot実行
+# 18. 心臓マッサージ ＆ Bot実行
 # ==========================================
 import asyncio
 
 TARGET_HEARTBEAT_CH_ID = 1569037305644056639
-SELF_PUBLIC_URL = "https://onrender.com"
 
-@tasks.loop(minutes=1)
+@tasks.loop(minutes=5)
 async def admin_channel_heartbeat():
-    """1分おきに管理者専用チャンネルへ無音送信＆即削除 ＋ 自身へのHTTPアクセス"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(SELF_PUBLIC_URL, timeout=10) as resp:
-                pass
-    except Exception:
-        pass
-
     try:
         ch = bot.get_channel(TARGET_HEARTBEAT_CH_ID) or await bot.fetch_channel(TARGET_HEARTBEAT_CH_ID)
         if ch:
@@ -2545,6 +2536,8 @@ async def on_ready():
     bot.add_view(TicketPanelView())
     bot.add_view(OrderPanelView())
     bot.add_view(CloseTicketView())
+    if not heartbeat_loop.is_running():
+        heartbeat_loop.start()
     if not watch_hunter_loop.is_running():
         watch_hunter_loop.start()
     if not admin_channel_heartbeat.is_running():
