@@ -2541,6 +2541,12 @@ async def admin_channel_heartbeat():
 
 @bot.event
 async def on_ready():
+    init_db()
+    bot.add_view(VendingMachineView())
+    bot.add_view(StatusPanelView())
+    bot.add_view(TicketPanelView())
+    bot.add_view(OrderPanelView())
+    bot.add_view(CloseTicketView())
     if not watch_hunter_loop.is_running():
         watch_hunter_loop.start()
     if not wake_up_promo_bot.is_running():
@@ -2548,6 +2554,7 @@ async def on_ready():
     if not admin_channel_heartbeat.is_running():
         admin_channel_heartbeat.start()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})", flush=True)
+
 
 async def handle_health(reader, writer):
     await reader.read(1024)
