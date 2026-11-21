@@ -2511,11 +2511,22 @@ async def cmd_recalc_ranks(interaction: discord.Interaction):
         ephemeral=True
     )
 # ==========================================
-# 18. 管理者専用チャンネルへの5分おき心臓マッサージ ＆ Bot実行
+# 18. 相互スリープ防止 ＆ 心臓マッサージ ＆ Bot実行
 # ==========================================
 import asyncio
 
 TARGET_HEARTBEAT_CH_ID = 1569037305644056639
+
+@tasks.loop(minutes=5)
+async def wake_up_promo_bot():
+    if not PROMO_BOT_URL:
+        return
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(PROMO_BOT_URL, timeout=15) as resp:
+                pass
+    except Exception as e:
+        print(f"Ping to Promo Bot failed: {e}", flush=True)
 
 @tasks.loop(minutes=5)
 async def admin_channel_heartbeat():
@@ -2532,6 +2543,8 @@ async def admin_channel_heartbeat():
 async def on_ready():
     if not watch_hunter_loop.is_running():
         watch_hunter_loop.start()
+    if not wake_up_promo_bot.is_running():
+        wake_up_promo_bot.start()
     if not admin_channel_heartbeat.is_running():
         admin_channel_heartbeat.start()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})", flush=True)
