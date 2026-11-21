@@ -1646,13 +1646,15 @@ async def cmd_ocr_stock(
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 @bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付して全データ＋ランク＋世代を1秒で完全復元")
 @app_commands.describe(db_file="バックアップした vending_backup_xxxx.db ファイル")
-async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Attachment):
-    if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("❌ オーナー専用コマンドです。", ephemeral=True)
+async def cmd_restore_db(interaction: discord.Interaction, db_file: 
+    await interaction.response.defer(ephemeral=True)
+
+    if OWNER_ID != 0 and interaction.user.id != OWNER_ID:
+        await interaction.followup.send("❌ オーナー専用コマンドです。", ephemeral=True)
         return
 
     if not db_file.filename.endswith(".db"):
-        await interaction.response.send_message("❌ `.db` 形式のバックアップファイルを添付してください。", ephemeral=True)
+        await interaction.followup.send("❌ `.db` 形式のバックアップファイルを添付してください。", ephemeral=True)
         return
 
     await interaction.response.defer(ephemeral=True)
@@ -2557,6 +2559,11 @@ async def main():
     async with server:
         async with bot:
             await bot.start(TOKEN)
+@bot.command()
+async def sync(ctx):
+    if ctx.author.id == OWNER_ID:
+        synced = await bot.tree.sync()
+        await ctx.send(f"✅ {len(synced)}個のコマンドを強制同期しました！")
 
 if __name__ == "__main__":
     asyncio.run(main())
