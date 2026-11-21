@@ -2524,11 +2524,10 @@ async def admin_channel_heartbeat():
     try:
         ch = bot.get_channel(TARGET_HEARTBEAT_CH_ID) or await bot.fetch_channel(TARGET_HEARTBEAT_CH_ID)
         if ch:
-            now_str = datetime.now(JST).strftime("%H:%M")
-                        msg = await ch.send(f"💓 稼働確認（{now_str}）", silent=True)
-            await msg.delete()
+        now_str = datetime.now(JST).strftime("%H:%M")
+        msg = await ch.send(f"💓 稼働確認（{now_str}）", silent=True)
+        await msg.delete()
 
-            await msg.delete()
     except Exception as e:
         print(f"Heartbeat send failed: {e}", flush=True)
 
