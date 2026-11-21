@@ -2520,14 +2520,12 @@ TARGET_HEARTBEAT_CH_ID = 1569037305644056639
 
 @tasks.loop(minutes=5)
 async def admin_channel_heartbeat():
-    """5分おきに管理者専用チャンネルへ無音送信＆即削除する心臓マッサージ"""
     try:
         ch = bot.get_channel(TARGET_HEARTBEAT_CH_ID) or await bot.fetch_channel(TARGET_HEARTBEAT_CH_ID)
         if ch:
-        now_str = datetime.now(JST).strftime("%H:%M")
-        msg = await ch.send(f"💓 稼働確認（{now_str}）", silent=True)
-        await msg.delete()
-
+            now_str = datetime.now(JST).strftime("%H:%M")
+            msg = await ch.send(f"💓 稼働確認（{now_str}）", silent=True)
+            await msg.delete()
     except Exception as e:
         print(f"Heartbeat send failed: {e}", flush=True)
 
@@ -2562,6 +2560,7 @@ async def main():
     async with server:
         async with bot:
             await bot.start(TOKEN)
+
 @bot.command()
 async def sync(ctx):
     if ctx.author.id == OWNER_ID:
