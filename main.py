@@ -2508,43 +2508,55 @@ async def cmd_recalc_ranks(interaction: discord.Interaction):
         f"✅ 購入実績のある **`{len(rows)}名`** のVIPランクと、現在の課金番付（覇者バッジ）の同期が完了しました！",
         ephemeral=True
     )
-# =========================================
-# 18. 相互スリープ防止（Webサーバー ＆ 宣伝Bot叩き起こし）＆ Bot実行
 # ==========================================
-async def handle_ping(request):
-    return web.Response(text="Vending Bot is alive!")
+# 18. 管理者専用チャンネルへの5分おき心臓マッサージ ＆ Bot実行
+# ==========================================
+import asyncio
 
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+TARGET_HEARTBEAT_CH_ID = 1569037305644056639
 
 @tasks.loop(minutes=5)
-async def wake_up_promo_bot():
-    """5分おきに宣伝BotのURLへアクセスしてスリープを防ぐ"""
-    if not PROMO_BOT_URL:
-        return
+async def admin_channel_heartbeat():
+    """5分おきに管理者専用チャンネルへ生存確認メッセージを送る"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(PROMO_BOT_URL, timeout=15) as resp:
-                pass
+        ch = bot.get_channel(TARGET_HEARTBEAT_CH_ID) or await bot.fetch_channel(TARGET_HEARTBEAT_CH_ID)
+        if ch:
+            now_str = datetime.now(JST).strftime("%H:%M")
+            await ch.send(f"💓 稼働確認（{now_str}）")
     except Exception as e:
-        print(f"Ping to Promo Bot failed: {e}")
+        print(f"Heartbeat send failed: {e}", flush=True)
 
-_orig_setup_hook = bot.setup_hook
-async def _new_setup_hook():
-    await start_web_server()
-    await _orig_setup_hook()
-    if not wake_up_promo_bot.is_running():
-        wake_up_promo_bot.start()
+@bot.event
+async def on_ready():
+    if not watch_hunter_loop.is_running():
+        watch_hunter_loop.start()
+    if not admin_channel_heartbeat.is_running():
+        admin_channel_heartbeat.start()
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})", flush=True)
 
-bot.setup_hook = _new_setup_hook
+async def handle_health(reader, writer):
+    await reader.read(1024)
+    response = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 22\r\n"
+        "\r\n"
+        "Vending Bot is alive!"
+    )
+    writer.write(response.encode())
+    await writer.drain()
+    writer.close()
+
+async def main():
+    if not TOKEN:
+        print("ERROR: DISCORD_TOKEN is empty!", flush=True)
+        return
+    port = int(os.environ.get("PORT", 10000))
+    server = await asyncio.start_server(handle_health, "0.0.0.0", port)
+    print(f"Health server listening on port {port}", flush=True)
+    async with server:
+        async with bot:
+            await bot.start(TOKEN)
 
 if __name__ == "__main__":
-    if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN が環境変数に設定されていません！")
-    bot.run(TOKEN)
+    asyncio.run(main())
