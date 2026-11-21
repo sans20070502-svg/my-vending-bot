@@ -1658,7 +1658,6 @@ async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Atta
         await interaction.followup.send("❌ `.db` 形式のバックアップファイルを添付してください。", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True)
     raw_bytes = await db_file.read()
     with open(DB_PATH, "wb") as f:
         f.write(raw_bytes)
