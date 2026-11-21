@@ -1646,7 +1646,8 @@ async def cmd_ocr_stock(
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 @bot.tree.command(name="restore_db", description="【オーナー専用】DMのバックアップファイル(.db)を添付して全データ＋ランク＋世代を1秒で完全復元")
 @app_commands.describe(db_file="バックアップした vending_backup_xxxx.db ファイル")
-async def cmd_restore_db(interaction: discord.Interaction, db_file: 
+async def cmd_restore_db(interaction: discord.Interaction, db_file: discord.Attachment):
+
     await interaction.response.defer(ephemeral=True)
 
     if OWNER_ID != 0 and interaction.user.id != OWNER_ID:
